@@ -147,9 +147,12 @@ export default function OutletDashboard() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total Units" value={totalQty.toLocaleString()} icon={<Package size={18} />} color="blue" />
-        <StatCard label="Total SKUs" value={stocks.length} icon={<Package size={18} />} color="purple" />
-        <StatCard label="Low Stock" value={lowStockItems.length} icon={<AlertTriangle size={18} />} color={lowStockItems.length > 0 ? 'red' : 'green'} />
+        <StatCard label="Total Units" value={totalQty.toLocaleString()} icon={<Package size={18} />} color="blue"
+          onClick={() => navigate(`/outlet/${outletId}/stock`)} />
+        <StatCard label="Total SKUs" value={stocks.length} icon={<Package size={18} />} color="purple"
+          onClick={() => navigate(`/outlet/${outletId}/stock`)} />
+        <StatCard label="Low Stock" value={lowStockItems.length} icon={<AlertTriangle size={18} />} color={lowStockItems.length > 0 ? 'red' : 'green'}
+          onClick={() => navigate(`/outlet/${outletId}/stock?filter=low`)} />
         {canViewCostPrice() && (
           <StatCard label="Stock Value" value={formatCurrency(totalValue)} icon={<TrendingUp size={18} />} color="green" />
         )}

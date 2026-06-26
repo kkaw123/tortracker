@@ -1,12 +1,33 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Package, AlertTriangle, DollarSign, ArrowRight, RefreshCw } from 'lucide-react';
+import { Package, AlertTriangle, DollarSign, ArrowRight, RefreshCw, X } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { supabase } from '../lib/supabase';
 import { formatCurrency, OUTLET_COLORS } from '../lib/utils';
 import StatCard from '../components/Common/StatCard';
 import LoadingSpinner from '../components/Common/LoadingSpinner';
 import type { OutletCode } from '../types';
+
+interface AllStockRow {
+  outlet: string;
+  brand: string;
+  model_code: string;
+  color_code: string;
+  size: string;
+  frame_type: string;
+  quantity: number;
+  low_stock_threshold: number;
+  status: string;
+}
+
+interface SkuGroup {
+  model_code: string;
+  brand: string;
+  total_variants: number;
+  total_qty: number;
+  outlets: string[];
+  variants: { color: string; size: string; outlet: string; qty: number }[];
+}
 
 interface OutletStats {
   code: OutletCode;
@@ -29,7 +50,74 @@ export default function BossDashboard() {
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const navigate = useNavigate();
 
+  // Modal states
+  const [allStockModal, setAllStockModal] = useState<'units' | 'low' | null>(null);
+  const [skuGroupModal, setSkuGroupModal] = useState(false);
+  const [allStock, setAllStock] = useState<AllStockRow[]>([]);
+  const [skuGroups, setSkuGroups] = useState<SkuGroup[]>([]);
+  const [modalLoading, setModalLoading] = useState(false);
+  const [modalSearch, setModalSearch] = useState('');
+
   useEffect(() => { fetchStats(); }, []);
+
+  async function openAllStockModal(mode: 'units' | 'low') {
+    setAllStockModal(mode);
+    setModalSearch('');
+    setModalLoading(true);
+    const { data: outlets } = await supabase.from('outlets').select('id, code');
+    const allOutletIds = (outlets ?? []).map((o: any) => o.id);
+    const outletMap: Record<string, string> = {};
+    (outlets ?? []).forEach((o: any) => { outletMap[o.id] = o.code; });
+
+    const { data: balances } = await supabase
+      .from('stock_balance')
+      .select(`quantity, low_stock_threshold, outlet_id, skus!inner(color_code, size, status, frame_models!inner(brand, model_code, frame_type))`)
+      .in('outlet_id', allOutletIds);
+
+    const rows: AllStockRow[] = (balances ?? []).map((b: any) => ({
+      outlet: outletMap[b.outlet_id] ?? '?',
+      brand: b.skus?.frame_models?.brand ?? '',
+      model_code: b.skus?.frame_models?.model_code ?? '',
+      color_code: b.skus?.color_code ?? '',
+      size: b.skus?.size ?? '',
+      frame_type: b.skus?.frame_models?.frame_type ?? '',
+      quantity: b.quantity,
+      low_stock_threshold: b.low_stock_threshold,
+      status: b.skus?.status ?? 'active',
+    }));
+    setAllStock(rows.sort((a, b) => a.model_code.localeCompare(b.model_code)));
+    setModalLoading(false);
+  }
+
+  async function openSkuGroupModal() {
+    setSkuGroupModal(true);
+    setModalSearch('');
+    setModalLoading(true);
+    const { data: outlets } = await supabase.from('outlets').select('id, code');
+    const outletMap: Record<string, string> = {};
+    (outlets ?? []).forEach((o: any) => { outletMap[o.id] = o.code; });
+    const allOutletIds = (outlets ?? []).map((o: any) => o.id);
+
+    const { data: balances } = await supabase
+      .from('stock_balance')
+      .select(`quantity, outlet_id, skus!inner(color_code, size, frame_models!inner(brand, model_code))`)
+      .in('outlet_id', allOutletIds);
+
+    const groups: Record<string, SkuGroup> = {};
+    (balances ?? []).forEach((b: any) => {
+      const mc = b.skus?.frame_models?.model_code ?? '';
+      const brand = b.skus?.frame_models?.brand ?? '';
+      const outlet = outletMap[b.outlet_id] ?? '?';
+      if (!groups[mc]) groups[mc] = { model_code: mc, brand, total_variants: 0, total_qty: 0, outlets: [], variants: [] };
+      groups[mc].total_variants++;
+      groups[mc].total_qty += b.quantity;
+      if (!groups[mc].outlets.includes(outlet)) groups[mc].outlets.push(outlet);
+      groups[mc].variants.push({ color: b.skus?.color_code ?? '', size: b.skus?.size ?? '', outlet, qty: b.quantity });
+    });
+
+    setSkuGroups(Object.values(groups).sort((a, b) => b.total_variants - a.total_variants));
+    setModalLoading(false);
+  }
 
   async function fetchStats() {
     setLoading(true);
@@ -112,9 +200,12 @@ export default function BossDashboard() {
 
       {/* Global KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total Stock Units" value={totalQty.toLocaleString()} icon={<Package size={18} />} color="blue" />
-        <StatCard label="Total SKUs" value={totalSkus.toLocaleString()} icon={<Package size={18} />} color="purple" />
-        <StatCard label="Low Stock Items" value={totalLow} icon={<AlertTriangle size={18} />} color={totalLow > 0 ? 'red' : 'green'} />
+        <StatCard label="Total Stock Units" value={totalQty.toLocaleString()} icon={<Package size={18} />} color="blue"
+          onClick={() => openAllStockModal('units')} />
+        <StatCard label="Total SKUs" value={totalSkus.toLocaleString()} icon={<Package size={18} />} color="purple"
+          onClick={() => openSkuGroupModal()} />
+        <StatCard label="Low Stock Items" value={totalLow} icon={<AlertTriangle size={18} />} color={totalLow > 0 ? 'red' : 'green'}
+          onClick={() => openAllStockModal('low')} />
         <StatCard label="Total Stock Value" value={formatCurrency(totalValue)} icon={<DollarSign size={18} />} color="green" />
       </div>
 
@@ -177,6 +268,125 @@ export default function BossDashboard() {
           </ResponsiveContainer>
         </div>
       </div>
+
+      {/* All Stock / Low Stock Modal */}
+      {allStockModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 pt-16 px-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+              <div>
+                <h3 className="text-base font-bold text-slate-800">
+                  {allStockModal === 'low' ? '⚠ Low Stock Items — All Outlets' : 'All Stock Units — All Outlets'}
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">Live view across PLT, SS2, KD, CHR</p>
+              </div>
+              <button onClick={() => setAllStockModal(null)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-400"><X size={18} /></button>
+            </div>
+            <div className="px-5 py-3 border-b border-slate-50">
+              <input value={modalSearch} onChange={(e) => setModalSearch(e.target.value)} placeholder="Search model, brand, color..."
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            {modalLoading ? (
+              <div className="p-12 text-center text-slate-400">Loading...</div>
+            ) : (
+              <div className="overflow-auto flex-1">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-slate-50 border-b border-slate-200">
+                    <tr>
+                      {['Outlet','Brand','Model','Color','Size','Type','Qty','Status'].map((h) => (
+                        <th key={h} className="text-left px-3 py-2.5 text-xs font-semibold text-slate-500 uppercase">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {allStock
+                      .filter((r) => allStockModal === 'low' ? r.quantity <= r.low_stock_threshold : true)
+                      .filter((r) => !modalSearch || `${r.brand} ${r.model_code} ${r.color_code}`.toLowerCase().includes(modalSearch.toLowerCase()))
+                      .map((r, i) => (
+                        <tr key={i} className={`hover:bg-slate-50 ${r.quantity <= r.low_stock_threshold ? 'bg-red-50' : ''}`}>
+                          <td className="px-3 py-2"><span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${OUTLET_COLORS[r.outlet as OutletCode] ?? 'bg-slate-100 text-slate-600'}`}>{r.outlet}</span></td>
+                          <td className="px-3 py-2 font-medium text-slate-800">{r.brand}</td>
+                          <td className="px-3 py-2 text-slate-700">{r.model_code}</td>
+                          <td className="px-3 py-2 text-slate-600">{r.color_code}</td>
+                          <td className="px-3 py-2 text-slate-600">{r.size}</td>
+                          <td className="px-3 py-2 text-slate-500 text-xs">{r.frame_type}</td>
+                          <td className={`px-3 py-2 font-bold ${r.quantity <= r.low_stock_threshold ? 'text-red-600' : 'text-slate-800'}`}>{r.quantity}</td>
+                          <td className="px-3 py-2">
+                            {r.status === 'discontinued'
+                              ? <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full">D/C</span>
+                              : <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full">Active</span>}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* SKU Groups Modal */}
+      {skuGroupModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 pt-16 px-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+              <div>
+                <h3 className="text-base font-bold text-slate-800">SKU Analysis — Model Code Groups</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Shows all model codes ranked by number of variants. High variants = more variety of the same model.</p>
+              </div>
+              <button onClick={() => setSkuGroupModal(false)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-400"><X size={18} /></button>
+            </div>
+            <div className="px-5 py-3 border-b border-slate-50">
+              <input value={modalSearch} onChange={(e) => setModalSearch(e.target.value)} placeholder="Search model code..."
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            {modalLoading ? (
+              <div className="p-12 text-center text-slate-400">Loading...</div>
+            ) : (
+              <div className="overflow-auto flex-1">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-slate-50 border-b border-slate-200">
+                    <tr>
+                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase">Model Code</th>
+                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase">Brand</th>
+                      <th className="text-right px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase">Variants</th>
+                      <th className="text-right px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase">Total Qty</th>
+                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase">Outlets</th>
+                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase">Colors / Sizes</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {skuGroups
+                      .filter((g) => !modalSearch || g.model_code.toLowerCase().includes(modalSearch.toLowerCase()) || g.brand.toLowerCase().includes(modalSearch.toLowerCase()))
+                      .map((g) => (
+                        <tr key={g.model_code} className={`hover:bg-slate-50 ${g.total_variants >= 5 ? 'bg-amber-50' : ''}`}>
+                          <td className="px-4 py-2.5 font-semibold text-slate-800 font-mono">{g.model_code}</td>
+                          <td className="px-4 py-2.5 text-slate-600">{g.brand}</td>
+                          <td className="px-4 py-2.5 text-right">
+                            <span className={`font-bold text-sm px-2 py-0.5 rounded-full ${g.total_variants >= 5 ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+                              {g.total_variants}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-semibold text-slate-700">{g.total_qty}</td>
+                          <td className="px-4 py-2.5 text-xs text-slate-500">{g.outlets.join(', ')}</td>
+                          <td className="px-4 py-2.5">
+                            <div className="flex flex-wrap gap-1">
+                              {g.variants.slice(0, 6).map((v, i) => (
+                                <span key={i} className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">{v.color}/{v.size}</span>
+                              ))}
+                              {g.variants.length > 6 && <span className="text-xs text-slate-400">+{g.variants.length - 6} more</span>}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Per-outlet cards */}
       <div>

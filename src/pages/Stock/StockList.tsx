@@ -25,6 +25,7 @@ interface StockRow {
   cost_price: number;
   selling_price: number;
   supplier_name: string;
+  status: string;
 }
 
 type SortKey = 'model_code' | 'brand' | 'quantity' | 'size' | 'frame_type';
@@ -42,6 +43,7 @@ export default function StockList() {
   const [filterType, setFilterType] = useState('');
   const [filterCat, setFilterCat] = useState('');
   const [filterSize, setFilterSize] = useState('');
+  const [filterStatus, setFilterStatus] = useState('active');
   const [onlyLow, setOnlyLow] = useState(searchParams.get('filter') === 'low');
   const [sortKey, setSortKey] = useState<SortKey>('model_code');
   const [sortAsc, setSortAsc] = useState(true);
@@ -86,7 +88,7 @@ export default function StockList() {
       .from('stock_balance')
       .select(`
         id, quantity, low_stock_threshold, sku_id,
-        skus!inner(id, color_code, size, frame_model_id,
+        skus!inner(id, color_code, size, frame_model_id, status,
           outlet_sku_prices(cost_price, selling_price, outlet_id),
           frame_models!inner(id, brand, model_code, frame_type, category, suppliers(name)))
       `)
@@ -110,6 +112,7 @@ export default function StockList() {
         cost_price: price?.cost_price ?? 0,
         selling_price: price?.selling_price ?? 0,
         supplier_name: b.skus?.frame_models?.suppliers?.name ?? '-',
+        status: b.skus?.status ?? 'active',
       };
     });
     setStocks(rows);
@@ -125,6 +128,8 @@ export default function StockList() {
       if (filterCat && s.category !== filterCat) return false;
       if (filterSize && s.size !== filterSize) return false;
       if (onlyLow && s.quantity > s.low_stock_threshold) return false;
+      if (filterStatus === 'active' && s.status !== 'active') return false;
+      if (filterStatus === 'discontinued' && s.status !== 'discontinued') return false;
       return true;
     })
     .sort((a, b) => {
@@ -246,6 +251,11 @@ export default function StockList() {
           <option value="">All Sizes</option>
           {allSizes.map((s) => <option key={s}>{s}</option>)}
         </select>
+        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="active">Active</option>
+          <option value="discontinued">Discontinued</option>
+          <option value="">All Status</option>
+        </select>
         <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
           <input type="checkbox" checked={onlyLow} onChange={(e) => setOnlyLow(e.target.checked)} className="w-4 h-4 accent-red-500" />
           <AlertTriangle size={14} className="text-red-500" /> Low Stock Only
@@ -310,9 +320,14 @@ export default function StockList() {
                     <td className="px-4 py-3 text-right text-slate-600">{formatCurrency(row.selling_price)}</td>
                   </>}
                   <td className="px-4 py-3 text-center">
-                    <button onClick={() => { setEditSku(row); setShowForm(true); }} className="p-1.5 rounded-lg hover:bg-blue-100 text-blue-500" title="Edit">
-                      <Edit2 size={14} />
-                    </button>
+                    <div className="flex items-center justify-center gap-1">
+                      {row.status === 'discontinued' && (
+                        <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">D/C</span>
+                      )}
+                      <button onClick={() => { setEditSku(row); setShowForm(true); }} className="p-1.5 rounded-lg hover:bg-blue-100 text-blue-500" title="Edit">
+                        <Edit2 size={14} />
+                      </button>
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-center">
                     <button onClick={() => openSkuHistory(row)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400" title="View movement history">
@@ -334,6 +349,7 @@ export default function StockList() {
             editData={editSku}
             onSaved={() => { setShowForm(false); setEditSku(null); fetchData(); }}
             onCancel={() => { setShowForm(false); setEditSku(null); }}
+            onDeleted={() => { setShowForm(false); setEditSku(null); fetchData(); }}
           />
         )}
       </Modal>

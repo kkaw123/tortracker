@@ -1,20 +1,29 @@
 import { useState } from 'react';
+import { Trash2, XCircle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { FRAME_TYPES, CATEGORIES } from '../../lib/utils';
 import { useAuth } from '../../contexts/AuthContext';
+
+const DELETE_PASSWORD = '1234';
 
 interface Props {
   outlet: { id: string; code: string; name: string };
   editData?: any;
   onSaved: () => void;
   onCancel: () => void;
+  onDeleted?: () => void;
 }
 
-export default function StockForm({ outlet, editData, onSaved, onCancel }: Props) {
+export default function StockForm({ outlet, editData, onSaved, onCancel, onDeleted }: Props) {
   useAuth();
   const isEdit = !!editData;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [showDiscontinueModal, setShowDiscontinueModal] = useState(false);
 
   const [brand, setBrand] = useState(editData?.brand ?? '');
   const [modelCode, setModelCode] = useState(editData?.model_code ?? '');
@@ -129,6 +138,32 @@ export default function StockForm({ outlet, editData, onSaved, onCancel }: Props
     }
   }
 
+  async function handleDelete() {
+    if (deletePassword !== DELETE_PASSWORD) {
+      setDeleteError('Incorrect password.');
+      return;
+    }
+    setDeleting(true);
+    try {
+      await supabase.from('stock_balance').delete().eq('outlet_id', outlet.id).eq('sku_id', editData.sku_id);
+      await supabase.from('outlet_sku_prices').delete().eq('outlet_id', outlet.id).eq('sku_id', editData.sku_id);
+      onDeleted?.();
+    } catch (e: any) {
+      setDeleteError(e.message ?? 'Delete failed.');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function handleDiscontinue() {
+    try {
+      await supabase.from('skus').update({ status: 'discontinued' }).eq('id', editData.sku_id);
+      onSaved();
+    } catch (e: any) {
+      setError(e.message ?? 'Failed to mark discontinued.');
+    }
+  }
+
   const input = (label: string, value: string, onChange: (v: string) => void, required = false, type = 'text') => (
     <div>
       <label className="block text-sm font-medium text-slate-700 mb-1">{label}{required && <span className="text-red-500 ml-1">*</span>}</label>
@@ -179,16 +214,84 @@ export default function StockForm({ outlet, editData, onSaved, onCancel }: Props
 
       {input('Supplier Name', supplierName, setSupplierName)}
 
-      <div className="flex justify-end gap-3 pt-2">
-        <button onClick={onCancel} className="px-4 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-        >
-          {saving ? 'Saving...' : isEdit ? 'Update Item' : 'Add Item'}
-        </button>
+      <div className="flex justify-between gap-3 pt-2">
+        <div className="flex gap-2">
+          {isEdit && (
+            <>
+              <button
+                onClick={() => setShowDiscontinueModal(true)}
+                className="flex items-center gap-1.5 px-4 py-2 border border-orange-300 text-orange-600 rounded-lg text-sm hover:bg-orange-50"
+              >
+                <XCircle size={14} /> Discontinued
+              </button>
+              <button
+                onClick={() => { setShowDeleteModal(true); setDeletePassword(''); setDeleteError(''); }}
+                className="flex items-center gap-1.5 px-4 py-2 border border-red-300 text-red-600 rounded-lg text-sm hover:bg-red-50"
+              >
+                <Trash2 size={14} /> Delete
+              </button>
+            </>
+          )}
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onCancel} className="px-4 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+          >
+            {saving ? 'Saving...' : isEdit ? 'Update Item' : 'Add Item'}
+          </button>
+        </div>
       </div>
+
+      {/* Delete confirmation modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-full max-w-sm shadow-xl">
+            <h3 className="text-base font-bold text-red-700 mb-1">Delete SKU</h3>
+            <p className="text-sm text-slate-600 mb-4">This will permanently remove this item from <strong>{outlet.code}</strong>. Enter password to confirm.</p>
+            <input
+              type="password"
+              value={deletePassword}
+              onChange={(e) => { setDeletePassword(e.target.value); setDeleteError(''); }}
+              placeholder="Enter password"
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500 mb-2"
+              autoFocus
+            />
+            {deleteError && <p className="text-xs text-red-600 mb-2">{deleteError}</p>}
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => setShowDeleteModal(false)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+              <button
+                onClick={handleDelete}
+                disabled={deleting || !deletePassword}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-semibold hover:bg-red-700 disabled:opacity-50"
+              >
+                {deleting ? 'Deleting...' : 'Confirm Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Discontinued confirmation modal */}
+      {showDiscontinueModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-full max-w-sm shadow-xl">
+            <h3 className="text-base font-bold text-orange-700 mb-1">Mark as Discontinued</h3>
+            <p className="text-sm text-slate-600 mb-4">This SKU will be marked as <strong>Discontinued</strong> and moved to the Inactive category. Stock remains recorded but it will no longer be considered active.</p>
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => setShowDiscontinueModal(false)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50">Cancel</button>
+              <button
+                onClick={() => { setShowDiscontinueModal(false); handleDiscontinue(); }}
+                className="px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-semibold hover:bg-orange-600"
+              >
+                Mark Discontinued
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

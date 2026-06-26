@@ -27,9 +27,8 @@ interface TransferLine {
   available_qty: number;
   qty: number;
   plt_cost: number;
-  plt_selling: number;
-  outlet_cost: number;
-  outlet_selling: number;
+  item_price: number;
+  rsp: number;
 }
 
 interface Props {
@@ -95,9 +94,8 @@ export default function CreateTransfer({ pltOutlet, onCreated, onCancel }: Props
       available_qty: stock.quantity,
       qty: 1,
       plt_cost: stock.plt_cost,
-      plt_selling: stock.plt_selling,
-      outlet_cost: stock.plt_selling, // default outlet cost = plt selling price
-      outlet_selling: 0,
+      item_price: stock.plt_selling,
+      rsp: 0,
     }]);
     setAddSearch('');
   }
@@ -143,9 +141,9 @@ export default function CreateTransfer({ pltOutlet, onCreated, onCancel }: Props
         sku_id: l.sku_id,
         quantity: l.qty,
         plt_cost_price: l.plt_cost,
-        outlet_cost_price: l.outlet_cost,
-        plt_selling_price: l.plt_selling,
-        outlet_selling_price: l.outlet_selling,
+        outlet_cost_price: l.item_price,
+        plt_selling_price: l.item_price,
+        outlet_selling_price: l.rsp,
       }));
       await supabase.from('transfer_items').insert(items);
 
@@ -242,8 +240,8 @@ export default function CreateTransfer({ pltOutlet, onCreated, onCancel }: Props
                 <th className="text-center px-3 py-2.5 text-xs font-semibold text-slate-500">Avail</th>
                 <th className="text-center px-3 py-2.5 text-xs font-semibold text-blue-600">Transfer Qty</th>
                 <th className="text-right px-3 py-2.5 text-xs font-semibold text-slate-500">PLT Cost</th>
-                <th className="text-right px-3 py-2.5 text-xs font-semibold text-slate-500">Outlet Cost</th>
-                <th className="text-right px-3 py-2.5 text-xs font-semibold text-slate-500">Outlet Sell</th>
+                <th className="text-right px-3 py-2.5 text-xs font-semibold text-slate-500">Item Price</th>
+                <th className="text-right px-3 py-2.5 text-xs font-semibold text-slate-500">RSP</th>
                 <th className="px-3 py-2.5"></th>
               </tr>
             </thead>
@@ -266,20 +264,21 @@ export default function CreateTransfer({ pltOutlet, onCreated, onCancel }: Props
                       className={`w-16 text-center mx-auto block px-2 py-1 border rounded text-sm focus:outline-none ${l.qty > l.available_qty ? 'border-red-400 bg-red-50' : 'border-blue-300 bg-blue-50'}`}
                     />
                   </td>
-                  <td className="px-3 py-2 text-right text-slate-600">{formatCurrency(l.plt_cost)}</td>
+                  <td className="px-3 py-2 text-right text-slate-500 text-xs">{formatCurrency(l.plt_cost)}</td>
                   <td className="px-3 py-2">
                     <input
                       type="number"
-                      value={l.outlet_cost}
-                      onChange={(e) => updateLine(l.sku_id, 'outlet_cost', e.target.value)}
-                      className="w-24 text-right ml-auto block px-2 py-1 border border-slate-300 rounded text-sm focus:outline-none"
+                      value={l.item_price}
+                      onChange={(e) => updateLine(l.sku_id, 'item_price', e.target.value)}
+                      className="w-24 text-right ml-auto block px-2 py-1 border border-blue-300 rounded text-sm focus:outline-none bg-blue-50"
                     />
                   </td>
                   <td className="px-3 py-2">
                     <input
                       type="number"
-                      value={l.outlet_selling}
-                      onChange={(e) => updateLine(l.sku_id, 'outlet_selling', e.target.value)}
+                      value={l.rsp}
+                      onChange={(e) => updateLine(l.sku_id, 'rsp', e.target.value)}
+                      placeholder="RSP"
                       className="w-24 text-right ml-auto block px-2 py-1 border border-slate-300 rounded text-sm focus:outline-none"
                     />
                   </td>
