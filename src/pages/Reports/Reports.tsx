@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { format, startOfMonth, endOfMonth } from 'date-fns';
+import { format, startOfMonth, endOfMonth, subDays, subMonths } from 'date-fns';
 import { Download, BarChart3, FileText, TrendingUp, Package, DollarSign } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../../lib/supabase';
@@ -16,9 +16,11 @@ export default function Reports() {
   const outletCode = outletId?.toUpperCase();
 
   const [reportType, setReportType] = useState<ReportType>('stock_summary');
-  const [period, setPeriod] = useState<'daily' | 'monthly' | 'yearly'>('monthly');
+  const [period, setPeriod] = useState<'daily' | 'monthly' | 'yearly' | 'custom'>('monthly');
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM'));
   const [selectedYear, setSelectedYear] = useState(String(new Date().getFullYear()));
+  const [customStart, setCustomStart] = useState(format(subDays(new Date(), 30), 'yyyy-MM-dd'));
+  const [customEnd, setCustomEnd] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [selectedOutlet, setSelectedOutlet] = useState(outletCode ?? 'all');
   const [loading, setLoading] = useState(false);
   const [reportData, setReportData] = useState<any[]>([]);
@@ -45,6 +47,9 @@ export default function Reports() {
       } else if (period === 'yearly') {
         dateStart = `${selectedYear}-01-01`;
         dateEnd = `${selectedYear}-12-31`;
+      } else if (period === 'custom') {
+        dateStart = customStart;
+        dateEnd = customEnd;
       } else {
         dateStart = selectedDate;
         dateEnd = selectedDate;
@@ -212,6 +217,27 @@ export default function Reports() {
           </div>
         </div>
 
+        {reportType === 'fast_movers' && (
+          <div>
+            <label className="block text-sm font-semibold text-slate-700 mb-2">Quick Period (Fast Movers)</label>
+            <div className="flex gap-2 flex-wrap">
+              {[
+                { label: 'Last 30 days', days: 30 },
+                { label: 'Last 3 months', days: 90 },
+                { label: 'Last 6 months', days: 180 },
+                { label: 'Last 1 year', days: 365 },
+              ].map(({ label, days }) => (
+                <button key={days} onClick={() => {
+                  setPeriod('custom');
+                  setCustomStart(format(subDays(new Date(), days), 'yyyy-MM-dd'));
+                  setCustomEnd(format(new Date(), 'yyyy-MM-dd'));
+                }} className="px-3 py-1.5 text-xs rounded-lg border border-blue-300 text-blue-700 hover:bg-blue-50 font-medium">
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Period</label>
@@ -219,21 +245,32 @@ export default function Reports() {
               <option value="monthly">Monthly</option>
               <option value="yearly">Yearly</option>
               <option value="daily">Daily</option>
+              <option value="custom">Custom Range</option>
             </select>
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">
-              {period === 'yearly' ? 'Year' : period === 'monthly' ? 'Month' : 'Date'}
+              {period === 'yearly' ? 'Year' : period === 'monthly' ? 'Month' : period === 'custom' ? 'From' : 'Date'}
             </label>
             {period === 'yearly' ? (
               <select value={selectedYear} onChange={(e) => setSelectedYear(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                 {[2024, 2025, 2026, 2027].map((y) => <option key={y}>{y}</option>)}
               </select>
+            ) : period === 'custom' ? (
+              <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             ) : (
               <input type={period === 'monthly' ? 'month' : 'date'} value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             )}
           </div>
+          {period === 'custom' && (
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">To</label>
+              <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+          )}
           {isBoss() && (
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Outlet</label>

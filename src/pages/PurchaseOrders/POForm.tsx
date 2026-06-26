@@ -56,7 +56,7 @@ export default function POForm({ outlet, onSaved, onCancel }: Props) {
 
       const { data: po, error: poErr } = await supabase.from('purchase_orders').insert({
         outlet_id: outlet.id, supplier_id: finalSupplierId,
-        status: 'pending', notes, po_number: generateRefNumber('PO'), created_by: user?.name,
+        status: 'pending', notes, po_number: generateRefNumber('INV'), created_by: user?.name,
       }).select().single();
       if (poErr) throw new Error(poErr.message);
 

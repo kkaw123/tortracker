@@ -89,16 +89,16 @@ export default function TransferList() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-bold text-slate-800">
-            {outletCode === 'PLT' ? 'Outgoing Transfers' : 'Incoming Transfers'}
+            {outletCode === 'PLT' ? 'Supply to Outlets' : 'Incoming Supply / Transfers'}
           </h2>
-          <p className="text-sm text-slate-500">{transfers.length} transfer records</p>
+          <p className="text-sm text-slate-500">{transfers.length} records</p>
         </div>
         {outletCode === 'PLT' && (
           <button
             onClick={() => setShowCreate(true)}
             className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
           >
-            <Plus size={14} /> New Transfer
+            <Plus size={14} /> New Supply
           </button>
         )}
       </div>

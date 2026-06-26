@@ -125,9 +125,9 @@ export default function Sidebar({ onClose, alertCount }: SidebarProps) {
             </div>
             {navItem(`/outlet/${myOutlet}/stock`, <Package size={16} />, 'Stock Inventory')}
             {navItem(`/outlet/${myOutlet}/adjustments`, <ClipboardList size={16} />, 'Daily Adjustment')}
-            {navItem(`/outlet/${myOutlet}/transfers`, <ArrowLeftRight size={16} />, 'Transfers')}
+            {navItem(`/outlet/${myOutlet}/transfers`, <ArrowLeftRight size={16} />, user?.outlet_code === 'PLT' ? 'Supply' : 'Transfers')}
             {navItem(`/outlet/${myOutlet}/complaints`, <AlertTriangle size={16} />, 'Quality Complaints')}
-            {navItem(`/outlet/${myOutlet}/purchase-orders`, <ShoppingCart size={16} />, 'Purchase Orders')}
+            {navItem(`/outlet/${myOutlet}/purchase-orders`, <ShoppingCart size={16} />, user?.outlet_code === 'PLT' ? 'Purchase Orders' : 'PO History')}
             {navItem(`/outlet/${myOutlet}/reports`, <BarChart3 size={16} />, 'Reports')}
           </>
         )}

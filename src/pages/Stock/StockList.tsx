@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { Plus, Search, Download, Upload, Edit2, AlertTriangle, ChevronUp, ChevronDown } from 'lucide-react';
+import { Plus, Search, Download, Upload, Edit2, AlertTriangle, ChevronUp, ChevronDown, History } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
@@ -47,9 +47,34 @@ export default function StockList() {
   const [sortAsc, setSortAsc] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editSku, setEditSku] = useState<StockRow | null>(null);
+  const [historyRow, setHistoryRow] = useState<StockRow | null>(null);
+  const [skuMovements, setSkuMovements] = useState<any[]>([]);
+  const [movLoading, setMovLoading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { fetchData(); }, [outletId]);
+
+  async function openSkuHistory(row: StockRow) {
+    setHistoryRow(row);
+    setMovLoading(true);
+    setSkuMovements([]);
+    // Re-fetch outlet if needed
+    let outletId = outlet?.id;
+    if (!outletId) {
+      const { data: od } = await supabase.from('outlets').select('id').eq('code', outletCode).single();
+      outletId = od?.id;
+    }
+    if (!outletId) { setMovLoading(false); return; }
+    const { data } = await supabase
+      .from('stock_movements')
+      .select('id, movement_type, quantity, notes, created_by, created_at')
+      .eq('outlet_id', outletId)
+      .eq('sku_id', row.sku_id)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    setSkuMovements(data ?? []);
+    setMovLoading(false);
+  }
 
   async function fetchData() {
     setLoading(true);
@@ -254,11 +279,12 @@ export default function StockList() {
                   <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500">Selling</th>
                 </>}
                 <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500">Actions</th>
+                <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500">History</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
               {filtered.length === 0 ? (
-                <tr><td colSpan={10} className="text-center py-12 text-slate-400">No items found.</td></tr>
+                <tr><td colSpan={11} className="text-center py-12 text-slate-400">No items found.</td></tr>
               ) : filtered.map((row) => (
                 <tr key={row.balance_id} className={`hover:bg-slate-50 ${row.quantity <= row.low_stock_threshold ? 'bg-red-50' : ''}`}>
                   <td className="px-4 py-3 font-medium text-slate-800">{row.brand}</td>
@@ -283,8 +309,13 @@ export default function StockList() {
                     <td className="px-4 py-3 text-right text-slate-600">{formatCurrency(row.selling_price)}</td>
                   </>}
                   <td className="px-4 py-3 text-center">
-                    <button onClick={() => { setEditSku(row); setShowForm(true); }} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500">
+                    <button onClick={() => { setEditSku(row); setShowForm(true); }} className="p-1.5 rounded-lg hover:bg-blue-100 text-blue-500" title="Edit">
                       <Edit2 size={14} />
+                    </button>
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <button onClick={() => openSkuHistory(row)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400" title="View movement history">
+                      <History size={14} />
                     </button>
                   </td>
                 </tr>
@@ -304,6 +335,65 @@ export default function StockList() {
             onCancel={() => { setShowForm(false); setEditSku(null); }}
           />
         )}
+      </Modal>
+
+      {/* SKU Movement History Modal */}
+      <Modal
+        open={!!historyRow}
+        onClose={() => { setHistoryRow(null); setSkuMovements([]); }}
+        title={historyRow ? `${historyRow.brand} ${historyRow.model_code}-${historyRow.color_code} (Sz ${historyRow.size})` : ''}
+        size="lg"
+      >
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs text-slate-500">Movement history at {outletCode} · last 50 records</span>
+            <span className="text-sm font-semibold text-slate-700">Current Qty: {historyRow?.quantity ?? 0}</span>
+          </div>
+          {movLoading ? (
+            <div className="text-center py-8 text-slate-400">Loading...</div>
+          ) : skuMovements.length === 0 ? (
+            <div className="text-center py-8 text-slate-400">No movement history yet for this SKU.</div>
+          ) : (
+            <div className="overflow-auto max-h-96 rounded-lg border border-slate-100">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200">
+                    <th className="text-left px-3 py-2 text-xs font-semibold text-slate-500">Date</th>
+                    <th className="text-left px-3 py-2 text-xs font-semibold text-slate-500">Type</th>
+                    <th className="text-right px-3 py-2 text-xs font-semibold text-slate-500">Qty</th>
+                    <th className="text-left px-3 py-2 text-xs font-semibold text-slate-500">Notes / Reason</th>
+                    <th className="text-left px-3 py-2 text-xs font-semibold text-slate-500">By</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {skuMovements.map((m) => (
+                    <tr key={m.id} className="hover:bg-slate-50">
+                      <td className="px-3 py-2 text-xs text-slate-500">{new Date(m.created_at).toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                      <td className="px-3 py-2">
+                        <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${m.movement_type.includes('in') ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          {m.movement_type.replace('_', ' ')}
+                        </span>
+                      </td>
+                      <td className={`px-3 py-2 text-right font-bold ${m.movement_type.includes('out') ? 'text-red-600' : 'text-green-600'}`}>
+                        {m.movement_type.includes('out') ? '-' : '+'}{m.quantity}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-600">{m.notes || '-'}</td>
+                      <td className="px-3 py-2 text-xs text-slate-500">{m.created_by}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="mt-4 flex justify-end">
+            <button
+              onClick={() => { setEditSku(historyRow); setHistoryRow(null); setShowForm(true); }}
+              className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
+            >
+              <Edit2 size={13} /> Edit This SKU
+            </button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

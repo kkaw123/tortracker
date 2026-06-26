@@ -98,6 +98,18 @@ export default function StockForm({ outlet, editData, onSaved, onCancel }: Props
         selling_price: Number(sellingPrice),
       }, { onConflict: 'sku_id,outlet_id' });
 
+      // Log stock movement for initial/updated stock
+      if (!isEdit && Number(quantity) > 0) {
+        await supabase.from('stock_movements').insert({
+          outlet_id: outlet.id,
+          sku_id: sku.id,
+          movement_type: 'in',
+          quantity: Number(quantity),
+          notes: 'Initial stock entry',
+          created_by: 'admin',
+        });
+      }
+
       // Check low stock and create alert
       if (Number(quantity) <= Number(threshold)) {
         await supabase.from('alerts').upsert({
