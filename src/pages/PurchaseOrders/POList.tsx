@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, Eye, Upload, FileText, CheckCircle, Clock } from 'lucide-react';
+import { Plus, Upload, FileText, CheckCircle, Clock } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateTime, formatCurrency } from '../../lib/utils';
@@ -28,7 +28,7 @@ interface PORow {
 
 export default function POList() {
   const { outletId } = useParams<{ outletId: string }>();
-  const { user } = useAuth();
+  useAuth();
   const outletCode = outletId?.toUpperCase();
   const isPLT = outletCode === 'PLT';
 
