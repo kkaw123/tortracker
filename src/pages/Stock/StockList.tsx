@@ -87,13 +87,14 @@ export default function StockList() {
       .select(`
         id, quantity, low_stock_threshold, sku_id,
         skus!inner(id, color_code, size, frame_model_id,
-          frame_models!inner(id, brand, model_code, frame_type, category, suppliers(name))),
-        outlet_sku_prices(cost_price, selling_price, outlet_id)
+          outlet_sku_prices(cost_price, selling_price, outlet_id),
+          frame_models!inner(id, brand, model_code, frame_type, category, suppliers(name)))
       `)
       .eq('outlet_id', outletData.id);
 
     const rows: StockRow[] = (balances ?? []).map((b: any) => {
-      const price = b.outlet_sku_prices?.find((p: any) => p.outlet_id === outletData.id);
+      const price = (b.skus?.outlet_sku_prices ?? []).find((p: any) => p.outlet_id === outletData.id)
+        ?? b.skus?.outlet_sku_prices?.[0];
       return {
         balance_id: b.id,
         sku_id: b.sku_id,
