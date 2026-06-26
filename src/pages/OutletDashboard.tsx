@@ -61,8 +61,7 @@ export default function OutletDashboard() {
         .from('stock_balance')
         .select(`
           id, quantity, low_stock_threshold, sku_id,
-          skus!inner(color_code, size, frame_models!inner(brand, model_code, frame_type, category)),
-          outlet_sku_prices!inner(cost_price, selling_price)
+          skus!inner(color_code, size, outlet_sku_prices(cost_price, selling_price, outlet_id), frame_models!inner(brand, model_code, frame_type, category))
         `)
         .eq('outlet_id', outletData.id);
 
@@ -81,13 +80,16 @@ export default function OutletDashboard() {
         soldMap[m.sku_id] = (soldMap[m.sku_id] ?? 0) + m.quantity;
       });
 
-      const items: StockItem[] = (balances ?? []).map((b: any) => ({
+      const items: StockItem[] = (balances ?? []).map((b: any) => {
+        const price = (b.skus?.outlet_sku_prices ?? []).find((p: any) => p.outlet_id === outletData.id)
+          ?? b.skus?.outlet_sku_prices?.[0];
+        return {
         id: b.id,
         sku_id: b.sku_id,
         quantity: b.quantity,
         low_stock_threshold: b.low_stock_threshold,
-        cost_price: b.outlet_sku_prices?.[0]?.cost_price ?? 0,
-        selling_price: b.outlet_sku_prices?.[0]?.selling_price ?? 0,
+        cost_price: price?.cost_price ?? 0,
+        selling_price: price?.selling_price ?? 0,
         brand: b.skus?.frame_models?.brand ?? '',
         model_code: b.skus?.frame_models?.model_code ?? '',
         color_code: b.skus?.color_code ?? '',
@@ -95,7 +97,8 @@ export default function OutletDashboard() {
         frame_type: b.skus?.frame_models?.frame_type ?? '',
         category: b.skus?.frame_models?.category ?? '',
         sold_last_30: soldMap[b.sku_id] ?? 0,
-      }));
+        };
+      });
       setStocks(items);
     } finally {
       setLoading(false);
