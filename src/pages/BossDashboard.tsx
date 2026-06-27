@@ -55,6 +55,7 @@ export default function BossDashboard() {
   const [allStockModal, setAllStockModal] = useState<'units' | 'low' | null>(null);
   const [skuGroupModal, setSkuGroupModal] = useState(false);
   const [valueModal, setValueModal] = useState(false);
+  const [frameTypeModal, setFrameTypeModal] = useState(false);
   const [allStock, setAllStock] = useState<AllStockRow[]>([]);
   const [skuGroups, setSkuGroups] = useState<SkuGroup[]>([]);
   const [modalLoading, setModalLoading] = useState(false);
@@ -260,9 +261,15 @@ export default function BossDashboard() {
           </ResponsiveContainer>
         </div>
 
-        {/* Frame type breakdown */}
-        <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-4">Stock by Frame Type (All Outlets)</h3>
+        {/* Frame type breakdown — clickable */}
+        <div
+          className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 cursor-pointer hover:shadow-md hover:border-blue-200 transition-all group"
+          onClick={() => setFrameTypeModal(true)}
+        >
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-slate-700">Stock by Frame Type (All Outlets)</h3>
+            <span className="text-xs text-blue-500 group-hover:underline">View details →</span>
+          </div>
           <ResponsiveContainer width="100%" height={200}>
             <PieChart>
               <Pie data={typePieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}>
@@ -456,6 +463,168 @@ export default function BossDashboard() {
           </div>
         </div>
       )}
+
+      {/* Frame Type Detail Modal */}
+      {frameTypeModal && (() => {
+        const allTypes = [...new Set(stats.flatMap((o) => Object.keys(o.by_type)))].sort();
+        const typeColors: Record<string, string> = Object.fromEntries(
+          allTypes.map((t, i) => [t, CHART_COLORS[i % CHART_COLORS.length]])
+        );
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 pt-10 px-4">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[88vh] flex flex-col">
+              {/* Modal header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+                <div>
+                  <h3 className="text-base font-bold text-slate-800">Stock by Frame Type — All Outlets</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">Quantity breakdown per frame type, per branch</p>
+                </div>
+                <button onClick={() => setFrameTypeModal(false)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-400"><X size={18} /></button>
+              </div>
+
+              <div className="overflow-auto flex-1 p-6 space-y-8">
+
+                {/* ── Combined overview ── */}
+                <div>
+                  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-4">Combined — All Outlets</h4>
+                  <div className="flex flex-col md:flex-row gap-6 items-center">
+                    {/* Big combined pie */}
+                    <div className="w-full md:w-64 shrink-0">
+                      <ResponsiveContainer width="100%" height={220}>
+                        <PieChart>
+                          <Pie data={typePieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={85}
+                            label={({ percent }) => `${((percent ?? 0) * 100).toFixed(0)}%`}
+                            labelLine={false}>
+                            {typePieData.map((entry) => (
+                              <Cell key={entry.name} fill={typeColors[entry.name] ?? '#94a3b8'} />
+                            ))}
+                          </Pie>
+                          <Tooltip formatter={(v: any) => [v, 'units']} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                    {/* Combined totals table */}
+                    <div className="flex-1 w-full">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-slate-50 rounded-lg">
+                            <th className="text-left px-3 py-2 text-xs font-semibold text-slate-500">Frame Type</th>
+                            <th className="text-right px-3 py-2 text-xs font-semibold text-slate-500">Total Qty</th>
+                            <th className="text-right px-3 py-2 text-xs font-semibold text-slate-500">% of Total</th>
+                            {stats.map((o) => (
+                              <th key={o.code} className="text-right px-3 py-2 text-xs font-semibold text-slate-500">{o.code}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                          {typePieData.sort((a, b) => b.value - a.value).map((row) => {
+                            const pct = totalQty > 0 ? ((row.value / totalQty) * 100).toFixed(1) : '0';
+                            return (
+                              <tr key={row.name} className="hover:bg-slate-50">
+                                <td className="px-3 py-2.5">
+                                  <div className="flex items-center gap-2">
+                                    <span className="w-3 h-3 rounded-full shrink-0" style={{ background: typeColors[row.name] ?? '#94a3b8' }} />
+                                    <span className="font-medium text-slate-800">{row.name}</span>
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2.5 text-right font-bold text-slate-800">{row.value}</td>
+                                <td className="px-3 py-2.5 text-right text-slate-500">{pct}%</td>
+                                {stats.map((o) => (
+                                  <td key={o.code} className="px-3 py-2.5 text-right text-slate-600">
+                                    {o.by_type[row.name] ?? 0}
+                                  </td>
+                                ))}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr className="border-t-2 border-slate-200 bg-slate-50">
+                            <td className="px-3 py-2 font-semibold text-slate-700">Total</td>
+                            <td className="px-3 py-2 text-right font-bold text-slate-800">{totalQty}</td>
+                            <td className="px-3 py-2 text-right text-slate-500">100%</td>
+                            {stats.map((o) => (
+                              <td key={o.code} className="px-3 py-2 text-right font-semibold text-slate-700">{o.total_qty}</td>
+                            ))}
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Per-outlet breakdown ── */}
+                <div>
+                  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-4">Per-Branch Breakdown</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    {stats.map((outlet) => {
+                      const outletTotal = outlet.total_qty;
+                      const outletPieData = Object.entries(outlet.by_type)
+                        .map(([name, value]) => ({ name, value }))
+                        .sort((a, b) => b.value - a.value);
+                      const barColor = OUTLET_CHART_COLORS[outlet.code] ?? '#94a3b8';
+                      return (
+                        <div key={outlet.code} className="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                          {/* Outlet header */}
+                          <div className="flex items-center gap-2 mb-3">
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${OUTLET_COLORS[outlet.code] ?? ''}`}>{outlet.code}</span>
+                            <span className="text-sm font-semibold text-slate-700">{outlet.name}</span>
+                            <span className="ml-auto text-xs text-slate-400">{outletTotal} units total</span>
+                          </div>
+
+                          <div className="flex gap-4 items-center">
+                            {/* Per-outlet pie */}
+                            <div className="shrink-0 w-40 h-40">
+                              <ResponsiveContainer width="100%" height="100%">
+                                <PieChart>
+                                  <Pie data={outletPieData} dataKey="value" nameKey="name"
+                                    cx="50%" cy="50%" outerRadius={58} innerRadius={22}
+                                    label={false}>
+                                    {outletPieData.map((entry) => (
+                                      <Cell key={entry.name} fill={typeColors[entry.name] ?? '#94a3b8'} />
+                                    ))}
+                                  </Pie>
+                                  <Tooltip formatter={(v: any) => [v, 'units']} />
+                                </PieChart>
+                              </ResponsiveContainer>
+                            </div>
+
+                            {/* Per-outlet type rows */}
+                            <div className="flex-1 space-y-1.5">
+                              {outletPieData.length === 0 ? (
+                                <div className="text-sm text-slate-400">No stock data</div>
+                              ) : outletPieData.map((row) => {
+                                const pct = outletTotal > 0 ? Math.round((row.value / outletTotal) * 100) : 0;
+                                return (
+                                  <div key={row.name}>
+                                    <div className="flex justify-between text-xs mb-0.5">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: typeColors[row.name] ?? '#94a3b8' }} />
+                                        <span className="text-slate-700 font-medium">{row.name}</span>
+                                      </div>
+                                      <div className="text-slate-600 font-semibold tabular-nums">
+                                        {row.value} <span className="text-slate-400 font-normal">({pct}%)</span>
+                                      </div>
+                                    </div>
+                                    <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                                      <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: barColor }} />
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Per-outlet cards */}
       <div>
