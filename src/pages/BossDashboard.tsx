@@ -37,6 +37,7 @@ interface OutletStats {
   low_stock_count: number;
   total_cost_value: number;
   by_type: Record<string, number>;
+  by_category: Record<string, number>;
 }
 
 const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
@@ -53,6 +54,7 @@ export default function BossDashboard() {
   // Modal states
   const [allStockModal, setAllStockModal] = useState<'units' | 'low' | null>(null);
   const [skuGroupModal, setSkuGroupModal] = useState(false);
+  const [valueModal, setValueModal] = useState(false);
   const [allStock, setAllStock] = useState<AllStockRow[]>([]);
   const [skuGroups, setSkuGroups] = useState<SkuGroup[]>([]);
   const [modalLoading, setModalLoading] = useState(false);
@@ -129,11 +131,12 @@ export default function BossDashboard() {
       for (const outlet of outlets) {
         const { data: balances } = await supabase
           .from('stock_balance')
-          .select(`quantity, low_stock_threshold, sku:skus(frame_model:frame_models(frame_type), outlet_sku_prices!inner(cost_price, outlet_id))`)
+          .select(`quantity, low_stock_threshold, sku:skus(frame_model:frame_models(frame_type, category), outlet_sku_prices!inner(cost_price, outlet_id))`)
           .eq('outlet_id', outlet.id);
 
         let total_qty = 0, low_stock_count = 0, total_cost_value = 0;
         const by_type: Record<string, number> = {};
+        const by_category: Record<string, number> = {};
 
         (balances ?? []).forEach((b: any) => {
           total_qty += b.quantity;
@@ -142,6 +145,8 @@ export default function BossDashboard() {
           if (price) total_cost_value += b.quantity * price.cost_price;
           const ft = b.sku?.frame_model?.frame_type;
           if (ft) by_type[ft] = (by_type[ft] ?? 0) + b.quantity;
+          const cat = b.sku?.frame_model?.category;
+          if (cat) by_category[cat] = (by_category[cat] ?? 0) + b.quantity;
         });
 
         result.push({
@@ -152,6 +157,7 @@ export default function BossDashboard() {
           low_stock_count,
           total_cost_value,
           by_type,
+          by_category,
         });
       }
       setStats(result);
@@ -206,7 +212,8 @@ export default function BossDashboard() {
           onClick={() => openSkuGroupModal()} />
         <StatCard label="Low Stock Items" value={totalLow} icon={<AlertTriangle size={18} />} color={totalLow > 0 ? 'red' : 'green'}
           onClick={() => openAllStockModal('low')} />
-        <StatCard label="Total Stock Value" value={formatCurrency(totalValue)} icon={<DollarSign size={18} />} color="green" />
+        <StatCard label="Total Stock Value" value={formatCurrency(totalValue)} icon={<DollarSign size={18} />} color="green"
+          onClick={() => setValueModal(true)} />
       </div>
 
       {/* Supply Recommendations */}
@@ -268,6 +275,68 @@ export default function BossDashboard() {
           </ResponsiveContainer>
         </div>
       </div>
+
+      {/* Stock Value Breakdown Modal */}
+      {valueModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 pt-16 px-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+              <div>
+                <h3 className="text-base font-bold text-slate-800">Stock Value Breakdown by Outlet</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Total inventory cost value across all outlets</p>
+              </div>
+              <button onClick={() => setValueModal(false)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-400"><X size={18} /></button>
+            </div>
+            <div className="overflow-auto flex-1 p-5 space-y-4">
+              {stats.map((o) => {
+                const pct = totalValue > 0 ? Math.round((o.total_cost_value / totalValue) * 100) : 0;
+                return (
+                  <div key={o.code} className="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${OUTLET_COLORS[o.code] ?? ''}`}>{o.code}</span>
+                        <span className="text-sm font-semibold text-slate-700">{o.name}</span>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-lg font-bold text-slate-800">{formatCurrency(o.total_cost_value)}</div>
+                        <div className="text-xs text-slate-400">{pct}% of total · {o.total_skus} SKUs · {o.total_qty} units</div>
+                      </div>
+                    </div>
+                    <div className="h-2 bg-slate-200 rounded-full overflow-hidden mb-3">
+                      <div className="h-full bg-blue-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <div className="text-xs font-semibold text-slate-500 mb-1.5">By Frame Type</div>
+                        <div className="flex flex-wrap gap-1">
+                          {Object.entries(o.by_type).map(([t, q]) => (
+                            <span key={t} className="text-xs bg-blue-50 border border-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{t}: <b>{q}</b></span>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold text-slate-500 mb-1.5">By Category</div>
+                        <div className="flex flex-wrap gap-1">
+                          {Object.entries(o.by_category).map(([c, q]) => (
+                            <span key={c} className="text-xs bg-purple-50 border border-purple-100 text-purple-700 px-2 py-0.5 rounded-full">{c}: <b>{q}</b></span>
+                          ))}
+                          {o.low_stock_count > 0 && (
+                            <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">⚠ {o.low_stock_count} low stock</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="border-t border-slate-200 pt-4 flex justify-between items-center">
+                <span className="text-sm font-semibold text-slate-600">Total across all outlets</span>
+                <span className="text-xl font-bold text-green-700">{formatCurrency(totalValue)}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* All Stock / Low Stock Modal */}
       {allStockModal && (

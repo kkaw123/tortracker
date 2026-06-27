@@ -100,6 +100,14 @@ export default function TransferDetail({ transferId, outletCode, onUpdated }: Pr
     if (!transfer || !user) return;
     setActing(true);
     try {
+      // Re-fetch current status to prevent double-receipt on rapid clicks
+      const { data: current } = await supabase.from('transfers').select('status').eq('id', transfer.id).single();
+      if (current?.status === 'received') {
+        alert('This transfer has already been received.');
+        setActing(false);
+        onUpdated();
+        return;
+      }
       await supabase.from('transfers').update({ status: 'received', received_at: new Date().toISOString() }).eq('id', transfer.id);
 
       // Get destination outlet id
