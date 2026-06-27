@@ -132,7 +132,7 @@ export default function BossDashboard() {
       for (const outlet of outlets) {
         const { data: balances } = await supabase
           .from('stock_balance')
-          .select(`quantity, low_stock_threshold, sku:skus(frame_model:frame_models(frame_type, category), outlet_sku_prices!inner(cost_price, outlet_id))`)
+          .select(`quantity, low_stock_threshold, sku:skus(status, frame_model:frame_models(frame_type, category), outlet_sku_prices!inner(cost_price, outlet_id))`)
           .eq('outlet_id', outlet.id);
 
         let total_qty = 0, low_stock_count = 0, total_cost_value = 0;
@@ -141,7 +141,8 @@ export default function BossDashboard() {
 
         (balances ?? []).forEach((b: any) => {
           total_qty += b.quantity;
-          if (b.quantity <= b.low_stock_threshold) low_stock_count++;
+          const skuStatus = b.sku?.status ?? 'active';
+          if (b.quantity <= b.low_stock_threshold && skuStatus !== 'discontinued') low_stock_count++;
           const price = b.sku?.outlet_sku_prices?.find((p: any) => p.outlet_id === outlet.id);
           if (price) total_cost_value += b.quantity * price.cost_price;
           const ft = b.sku?.frame_model?.frame_type;
@@ -262,24 +263,29 @@ export default function BossDashboard() {
         </div>
 
         {/* Frame type breakdown — clickable */}
-        <div
-          className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 cursor-pointer hover:shadow-md hover:border-blue-200 transition-all group"
-          onClick={() => setFrameTypeModal(true)}
-        >
+        <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 flex flex-col">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-slate-700">Stock by Frame Type (All Outlets)</h3>
-            <span className="text-xs text-blue-500 group-hover:underline">View details →</span>
+            <button
+              onClick={() => setFrameTypeModal(true)}
+              className="text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-lg transition-colors"
+            >
+              View Details →
+            </button>
           </div>
-          <ResponsiveContainer width="100%" height={200}>
-            <PieChart>
-              <Pie data={typePieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}>
-                {typePieData.map((_, i) => (
-                  <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
+          <div className="cursor-pointer" onClick={() => setFrameTypeModal(true)}>
+            <ResponsiveContainer width="100%" height={200}>
+              <PieChart onClick={() => setFrameTypeModal(true)}>
+                <Pie data={typePieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70}
+                  label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}>
+                  {typePieData.map((_, i) => (
+                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       </div>
 

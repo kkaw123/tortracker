@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { Plus, Search, Download, Upload, Edit2, AlertTriangle, ChevronUp, ChevronDown, History, Clock } from 'lucide-react';
+import { Plus, Search, Download, Upload, Edit2, AlertTriangle, ChevronUp, ChevronDown, History, Clock, TrendingDown } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
@@ -27,6 +27,7 @@ interface StockRow {
   selling_price: number;
   supplier_name: string;
   status: string;
+  slow_moving: boolean;
 }
 
 interface PendingTransfer {
@@ -66,6 +67,7 @@ export default function StockList() {
   const [filterSize, setFilterSize] = useState('');
   const [filterStatus, setFilterStatus] = useState('active');
   const [onlyLow, setOnlyLow] = useState(searchParams.get('filter') === 'low');
+  const [onlySlowMoving, setOnlySlowMoving] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>('model_code');
   const [sortAsc, setSortAsc] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -142,7 +144,7 @@ export default function StockList() {
         .from('stock_balance')
         .select(`
           id, quantity, low_stock_threshold, sku_id,
-          skus!inner(id, color_code, size, frame_model_id, status,
+          skus!inner(id, color_code, size, frame_model_id, status, slow_moving,
             outlet_sku_prices(cost_price, selling_price, outlet_id),
             frame_models!inner(id, brand, model_code, frame_type, category, suppliers(name)))
         `)
@@ -182,6 +184,7 @@ export default function StockList() {
         category: b.skus?.frame_models?.category ?? '',
         quantity: b.quantity,
         on_hold_qty: onHoldMap[b.sku_id] ?? 0,
+        slow_moving: b.skus?.slow_moving ?? false,
         low_stock_threshold: b.low_stock_threshold,
         cost_price: price?.cost_price ?? 0,
         selling_price: price?.selling_price ?? 0,
@@ -202,6 +205,7 @@ export default function StockList() {
       if (filterCat && s.category !== filterCat) return false;
       if (filterSize && s.size !== filterSize) return false;
       if (onlyLow && s.quantity > s.low_stock_threshold) return false;
+      if (onlySlowMoving && !s.slow_moving) return false;
       if (filterStatus === 'active' && s.status !== 'active') return false;
       if (filterStatus === 'discontinued' && s.status !== 'discontinued') return false;
       return true;
@@ -220,6 +224,11 @@ export default function StockList() {
   function SortIcon({ k }: { k: SortKey }) {
     if (sortKey !== k) return null;
     return sortAsc ? <ChevronUp size={12} /> : <ChevronDown size={12} />;
+  }
+
+  async function toggleSlowMoving(row: StockRow) {
+    await supabase.from('skus').update({ slow_moving: !row.slow_moving }).eq('id', row.sku_id);
+    fetchData();
   }
 
   function exportExcel() {
@@ -338,6 +347,10 @@ export default function StockList() {
           <input type="checkbox" checked={onlyLow} onChange={(e) => setOnlyLow(e.target.checked)} className="w-4 h-4 accent-red-500" />
           <AlertTriangle size={14} className="text-red-500" /> Low Stock Only
         </label>
+        <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
+          <input type="checkbox" checked={onlySlowMoving} onChange={(e) => setOnlySlowMoving(e.target.checked)} className="w-4 h-4 accent-amber-500" />
+          <TrendingDown size={14} className="text-amber-500" /> Slow Moving
+        </label>
       </div>
 
       {/* Table */}
@@ -418,10 +431,22 @@ export default function StockList() {
                       <td className="px-4 py-3 text-right text-slate-600">{formatCurrency(row.selling_price)}</td>
                     </>}
                     <td className="px-4 py-3 text-center">
-                      <div className="flex items-center justify-center gap-1">
+                      <div className="flex items-center justify-center gap-1 flex-wrap">
                         {row.status === 'discontinued' && (
                           <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">D/C</span>
                         )}
+                        {row.slow_moving && (
+                          <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium flex items-center gap-0.5">
+                            <TrendingDown size={10} /> Slow
+                          </span>
+                        )}
+                        <button
+                          onClick={() => toggleSlowMoving(row)}
+                          title={row.slow_moving ? 'Remove slow-moving label' : 'Mark as slow-moving'}
+                          className={`p-1.5 rounded-lg transition-colors ${row.slow_moving ? 'bg-amber-100 text-amber-600 hover:bg-amber-200' : 'hover:bg-slate-100 text-slate-300 hover:text-amber-500'}`}
+                        >
+                          <TrendingDown size={14} />
+                        </button>
                         <button onClick={() => { setEditSku(row); setShowForm(true); }} className="p-1.5 rounded-lg hover:bg-blue-100 text-blue-500" title="Edit">
                           <Edit2 size={14} />
                         </button>

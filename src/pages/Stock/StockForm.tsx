@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Trash2, XCircle } from 'lucide-react';
+import { Trash2, XCircle, CheckCircle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { FRAME_TYPES, CATEGORIES } from '../../lib/utils';
 import { useAuth } from '../../contexts/AuthContext';
@@ -164,6 +164,15 @@ export default function StockForm({ outlet, editData, onSaved, onCancel, onDelet
     }
   }
 
+  async function handleMarkActive() {
+    try {
+      await supabase.from('skus').update({ status: 'active' }).eq('id', editData.sku_id);
+      onSaved();
+    } catch (e: any) {
+      setError(e.message ?? 'Failed to mark as active.');
+    }
+  }
+
   const input = (label: string, value: string, onChange: (v: string) => void, required = false, type = 'text') => (
     <div>
       <label className="block text-sm font-medium text-slate-700 mb-1">{label}{required && <span className="text-red-500 ml-1">*</span>}</label>
@@ -218,12 +227,21 @@ export default function StockForm({ outlet, editData, onSaved, onCancel, onDelet
         <div className="flex gap-2">
           {isEdit && (
             <>
-              <button
-                onClick={() => setShowDiscontinueModal(true)}
-                className="flex items-center gap-1.5 px-4 py-2 border border-orange-300 text-orange-600 rounded-lg text-sm hover:bg-orange-50"
-              >
-                <XCircle size={14} /> Discontinued
-              </button>
+              {editData?.status === 'discontinued' ? (
+                <button
+                  onClick={handleMarkActive}
+                  className="flex items-center gap-1.5 px-4 py-2 border border-green-300 text-green-700 rounded-lg text-sm hover:bg-green-50"
+                >
+                  <CheckCircle size={14} /> Mark as Active
+                </button>
+              ) : (
+                <button
+                  onClick={() => setShowDiscontinueModal(true)}
+                  className="flex items-center gap-1.5 px-4 py-2 border border-orange-300 text-orange-600 rounded-lg text-sm hover:bg-orange-50"
+                >
+                  <XCircle size={14} /> Discontinued
+                </button>
+              )}
               <button
                 onClick={() => { setShowDeleteModal(true); setDeletePassword(''); setDeleteError(''); }}
                 className="flex items-center gap-1.5 px-4 py-2 border border-red-300 text-red-600 rounded-lg text-sm hover:bg-red-50"
