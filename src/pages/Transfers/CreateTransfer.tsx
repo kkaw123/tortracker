@@ -61,25 +61,43 @@ export default function CreateTransfer({ pltOutlet, onCreated, onCancel }: Props
   }, [toOutletCode]);
 
   async function fetchPLTStock() {
-    const { data: balances } = await supabase
-      .from('stock_balance')
-      .select(`id, quantity, sku_id, skus!inner(id, color_code, size, frame_model_id, plt_cost_price, plt_selling_price, frame_models!inner(id, brand, model_code, frame_type))`)
-      .eq('outlet_id', pltOutlet.id)
-      .gt('quantity', 0);
+    const [balancesRes, inTransitRes] = await Promise.all([
+      supabase
+        .from('stock_balance')
+        .select(`id, quantity, sku_id, skus!inner(id, color_code, size, frame_model_id, plt_cost_price, plt_selling_price, frame_models!inner(id, brand, model_code, frame_type))`)
+        .eq('outlet_id', pltOutlet.id),
+      supabase
+        .from('transfers')
+        .select('transfer_items(sku_id, quantity)')
+        .eq('from_outlet_id', pltOutlet.id)
+        .in('status', ['pending_confirmation', 'delivered'])
+        .eq('plt_stock_deducted', false),
+    ]);
 
-    const rows: PLTStock[] = (balances ?? []).map((b: any) => ({
-      balance_id: b.id,
-      sku_id: b.sku_id,
-      fm_id: b.skus?.frame_models?.id ?? '',
-      brand: b.skus?.frame_models?.brand ?? '',
-      model_code: b.skus?.frame_models?.model_code ?? '',
-      color_code: b.skus?.color_code ?? '',
-      size: b.skus?.size ?? '',
-      frame_type: b.skus?.frame_models?.frame_type ?? '',
-      quantity: b.quantity,
-      plt_cost: b.skus?.plt_cost_price ?? 0,
-      plt_selling: b.skus?.plt_selling_price ?? 0,
-    }));
+    // Build in-transit map (sku_id → qty)
+    const inTransitMap: Record<string, number> = {};
+    ((inTransitRes.data ?? []) as any[]).forEach((t: any) => {
+      (t.transfer_items ?? []).forEach((i: any) => {
+        inTransitMap[i.sku_id] = (inTransitMap[i.sku_id] ?? 0) + i.quantity;
+      });
+    });
+
+    const rows: PLTStock[] = ((balancesRes.data ?? []) as any[]).map((b: any) => {
+      const inTransit = inTransitMap[b.sku_id] ?? 0;
+      return {
+        balance_id: b.id,
+        sku_id: b.sku_id,
+        fm_id: b.skus?.frame_models?.id ?? '',
+        brand: b.skus?.frame_models?.brand ?? '',
+        model_code: b.skus?.frame_models?.model_code ?? '',
+        color_code: b.skus?.color_code ?? '',
+        size: b.skus?.size ?? '',
+        frame_type: b.skus?.frame_models?.frame_type ?? '',
+        quantity: Math.max(0, b.quantity - inTransit),
+        plt_cost: b.skus?.plt_cost_price ?? 0,
+        plt_selling: b.skus?.plt_selling_price ?? 0,
+      };
+    }).filter((r) => r.quantity > 0);
     setPltStock(rows.sort((a, b) => a.model_code.localeCompare(b.model_code)));
   }
 
@@ -131,6 +149,7 @@ export default function CreateTransfer({ pltOutlet, onCreated, onCancel }: Props
           invoice_number: invoiceNo,
           notes,
           created_by: user.name,
+          plt_stock_deducted: false,
         })
         .select()
         .single();
@@ -147,21 +166,10 @@ export default function CreateTransfer({ pltOutlet, onCreated, onCancel }: Props
       }));
       await supabase.from('transfer_items').insert(items);
 
-      // Deduct from PLT stock
-      for (const l of validLines) {
-        const pltItem = pltStock.find((s) => s.sku_id === l.sku_id);
-        if (pltItem) {
-          await supabase.from('stock_balance')
-            .update({ quantity: pltItem.quantity - l.qty })
-            .eq('id', pltItem.balance_id);
-          await supabase.from('stock_movements').insert({
-            outlet_id: pltOutlet.id, sku_id: l.sku_id, movement_type: 'transfer_out',
-            quantity: l.qty, reference_id: transfer.id, notes: `Transfer to ${toOutletCode}`, created_by: user.name,
-          });
-        }
-      }
+      // PLT stock is NOT deducted at creation — it is deducted when the outlet confirms receipt.
+      // Units are held "On Hold" until then. Created with plt_stock_deducted=false.
 
-      alert(`Transfer ${invoiceNo} created successfully!`);
+      alert(`Transfer ${invoiceNo} created. Stock is On Hold at PLT until ${toOutletCode} confirms receipt.`);
       onCreated();
     } catch (e: any) {
       alert('Error: ' + e.message);

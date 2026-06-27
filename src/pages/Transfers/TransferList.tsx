@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, Eye } from 'lucide-react';
+import { Plus, CheckCircle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatDateTime, STATUS_COLORS, OUTLET_COLORS } from '../../lib/utils';
@@ -22,6 +22,7 @@ interface TransferRow {
   created_at: string;
   item_count: number;
   total_qty: number;
+  plt_stock_deducted: boolean;
 }
 
 export default function TransferList() {
@@ -43,10 +44,9 @@ export default function TransferList() {
     if (!outletData) { setLoading(false); return; }
     setOutlet(outletData);
 
-    // PLT sees outgoing, other outlets see incoming
     let query = supabase
       .from('transfers')
-      .select(`id, invoice_number, status, created_by, created_at, notes,
+      .select(`id, invoice_number, status, created_by, created_at, notes, plt_stock_deducted,
         from_outlet:outlets!transfers_from_outlet_id_fkey(code),
         to_outlet:outlets!transfers_to_outlet_id_fkey(code, name),
         transfer_items(quantity)`)
@@ -70,6 +70,7 @@ export default function TransferList() {
       created_at: t.created_at,
       item_count: t.transfer_items?.length ?? 0,
       total_qty: (t.transfer_items ?? []).reduce((s: number, i: any) => s + i.quantity, 0),
+      plt_stock_deducted: t.plt_stock_deducted ?? true,
     }));
     setTransfers(rows);
     setLoading(false);
@@ -80,20 +81,23 @@ export default function TransferList() {
     pending_confirmation: 'Pending Confirm',
     delivered: 'Delivered',
     received: 'Received',
+    disputed: 'Disputed',
   };
 
   if (loading) return <LoadingSpinner />;
+
+  const isPLT = outletCode === 'PLT';
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-bold text-slate-800">
-            {outletCode === 'PLT' ? 'Supply to Outlets' : 'Incoming Supply / Transfers'}
+            {isPLT ? 'Supply to Outlets' : 'Received Order History'}
           </h2>
           <p className="text-sm text-slate-500">{transfers.length} records</p>
         </div>
-        {outletCode === 'PLT' && (
+        {isPLT && (
           <button
             onClick={() => setShowCreate(true)}
             className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
@@ -109,39 +113,71 @@ export default function TransferList() {
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
                 <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Invoice No.</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">From → To</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">
+                  {isPLT ? 'To Outlet' : 'From'}
+                </th>
                 <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Status</th>
-                <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Items</th>
+                <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase">SKUs</th>
                 <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Total Qty</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Created</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">By</th>
-                <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Actions</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Date</th>
+                <th className="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
               {transfers.length === 0 ? (
-                <tr><td colSpan={8} className="text-center py-12 text-slate-400">No transfers found.</td></tr>
+                <tr><td colSpan={7} className="text-center py-12 text-slate-400">No records found.</td></tr>
               ) : transfers.map((t) => (
                 <tr key={t.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-sm font-semibold text-blue-700">{t.invoice_number}</td>
+                  {/* Clickable invoice number */}
+                  <td className="px-4 py-3">
+                    <button
+                      onClick={() => setViewId(t.id)}
+                      className="font-mono text-sm font-semibold text-blue-700 hover:text-blue-900 hover:underline"
+                    >
+                      {t.invoice_number}
+                    </button>
+                  </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${OUTLET_COLORS[t.from_code as OutletCode] ?? ''}`}>{t.from_code}</span>
-                      <span className="text-slate-400">→</span>
-                      <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${OUTLET_COLORS[t.to_code as OutletCode] ?? ''}`}>{t.to_code}</span>
+                      {isPLT ? (
+                        <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${OUTLET_COLORS[t.to_code as OutletCode] ?? ''}`}>{t.to_code}</span>
+                      ) : (
+                        <>
+                          <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${OUTLET_COLORS[t.from_code as OutletCode] ?? ''}`}>{t.from_code}</span>
+                          <span className="text-slate-400">→</span>
+                          <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${OUTLET_COLORS[t.to_code as OutletCode] ?? ''}`}>{t.to_code}</span>
+                        </>
+                      )}
                     </div>
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <Badge label={statusLabel[t.status]} className={STATUS_COLORS[t.status]} />
+                    <div className="flex items-center justify-center gap-1 flex-wrap">
+                      <Badge label={statusLabel[t.status]} className={STATUS_COLORS[t.status]} />
+                      {isPLT && !t.plt_stock_deducted && (t.status === 'pending_confirmation' || t.status === 'delivered') && (
+                        <span className="text-xs bg-amber-100 text-amber-700 font-bold px-1.5 py-0.5 rounded-full">On Hold</span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-right text-slate-600">{t.item_count}</td>
                   <td className="px-4 py-3 text-right font-semibold text-slate-800">{t.total_qty}</td>
                   <td className="px-4 py-3 text-slate-500 text-xs">{formatDateTime(t.created_at)}</td>
-                  <td className="px-4 py-3 text-slate-600 text-xs">{t.created_by}</td>
                   <td className="px-4 py-3 text-center">
-                    <button onClick={() => setViewId(t.id)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500" title="View details">
-                      <Eye size={14} />
-                    </button>
+                    {/* Quick Order Received button for outlet users */}
+                    {!isPLT && t.status === 'delivered' ? (
+                      <button
+                        onClick={() => setViewId(t.id)}
+                        className="flex items-center gap-1 px-2.5 py-1.5 bg-green-600 text-white rounded-lg text-xs font-semibold hover:bg-green-700"
+                      >
+                        <CheckCircle size={12} /> Order Received
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setViewId(t.id)}
+                        className="text-xs text-blue-600 hover:underline px-2"
+                      >
+                        View
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -151,7 +187,7 @@ export default function TransferList() {
       </div>
 
       {/* Create Transfer Modal */}
-      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Create New Transfer" size="xl">
+      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Create New Supply" size="xl">
         {outlet && (
           <CreateTransfer
             pltOutlet={outlet}
@@ -161,8 +197,8 @@ export default function TransferList() {
         )}
       </Modal>
 
-      {/* Transfer Detail Modal */}
-      <Modal open={!!viewId} onClose={() => setViewId(null)} title="Transfer Details" size="xl">
+      {/* Transfer Detail / Invoice Modal */}
+      <Modal open={!!viewId} onClose={() => { setViewId(null); fetchData(); }} title="Supply Invoice" size="xl">
         {viewId && (
           <TransferDetail
             transferId={viewId}

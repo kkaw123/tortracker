@@ -108,6 +108,24 @@ export default function OutletDashboard() {
   if (loading) return <LoadingSpinner text={`Loading ${outletCode} dashboard...`} />;
   if (!outlet) return <div className="text-red-600 p-4">Outlet not found.</div>;
 
+  const [inTransitQty, setInTransitQty] = useState(0);
+
+  useEffect(() => {
+    if (outletCode === 'PLT' && outlet) {
+      supabase
+        .from('transfers')
+        .select('transfer_items(quantity)')
+        .eq('from_outlet_id', outlet.id)
+        .in('status', ['pending_confirmation', 'delivered'])
+        .eq('plt_stock_deducted', false)
+        .then(({ data }) => {
+          const qty = (data ?? []).reduce((s: number, t: any) =>
+            s + (t.transfer_items ?? []).reduce((ss: number, i: any) => ss + i.quantity, 0), 0);
+          setInTransitQty(qty);
+        });
+    }
+  }, [outlet, outletCode]);
+
   const totalQty = stocks.reduce((s, i) => s + i.quantity, 0);
   const totalValue = stocks.reduce((s, i) => s + i.quantity * i.cost_price, 0);
   const lowStockItems = stocks.filter((i) => i.quantity <= i.low_stock_threshold);
@@ -153,9 +171,12 @@ export default function OutletDashboard() {
           onClick={() => navigate(`/outlet/${outletId}/stock`)} />
         <StatCard label="Low Stock" value={lowStockItems.length} icon={<AlertTriangle size={18} />} color={lowStockItems.length > 0 ? 'red' : 'green'}
           onClick={() => navigate(`/outlet/${outletId}/stock?filter=low`)} />
-        {canViewCostPrice() && (
+        {outletCode === 'PLT' && inTransitQty > 0 ? (
+          <StatCard label="On Hold / In Transit" value={`${inTransitQty} units`} icon={<ArrowRight size={18} />} color="purple"
+            onClick={() => navigate(`/outlet/${outletId}/transfers`)} />
+        ) : canViewCostPrice() ? (
           <StatCard label="Stock Value" value={formatCurrency(totalValue)} icon={<TrendingUp size={18} />} color="green" />
-        )}
+        ) : null}
       </div>
 
       {/* Low Stock Alert Banner */}
@@ -304,7 +325,7 @@ export default function OutletDashboard() {
         {[
           { label: 'Stock List', icon: <Package size={20} />, path: 'stock' },
           { label: 'Daily Adjustment', icon: <ClipboardList size={20} />, path: 'adjustments' },
-          { label: 'Transfers', icon: <ArrowRight size={20} />, path: 'transfers' },
+          { label: outletCode === 'PLT' ? 'Supply to Outlets' : 'Received Order History', icon: <ArrowRight size={20} />, path: 'transfers' },
           { label: 'Reports', icon: <TrendingUp size={20} />, path: 'reports' },
         ].map((action) => (
           <button
