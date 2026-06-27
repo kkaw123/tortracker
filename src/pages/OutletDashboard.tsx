@@ -163,7 +163,10 @@ export default function OutletDashboard() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total Units" value={totalQty.toLocaleString()} icon={<Package size={18} />} color="blue"
+        <StatCard
+          label={outletCode === 'PLT' ? 'Available Units' : 'Total Units'}
+          value={(outletCode === 'PLT' ? Math.max(0, totalQty - inTransitQty) : totalQty).toLocaleString()}
+          icon={<Package size={18} />} color="blue"
           onClick={() => navigate(`/outlet/${outletId}/stock`)} />
         <StatCard label="Total SKUs" value={stocks.length} icon={<Package size={18} />} color="purple"
           onClick={() => navigate(`/outlet/${outletId}/stock`)} />

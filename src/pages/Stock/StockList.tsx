@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { Plus, Search, Download, Upload, Edit2, AlertTriangle, ChevronUp, ChevronDown, History } from 'lucide-react';
+import { Plus, Search, Download, Upload, Edit2, AlertTriangle, ChevronUp, ChevronDown, History, Clock } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
@@ -21,6 +21,7 @@ interface StockRow {
   frame_type: string;
   category: string;
   quantity: number;
+  on_hold_qty: number;
   low_stock_threshold: number;
   cost_price: number;
   selling_price: number;
@@ -28,7 +29,27 @@ interface StockRow {
   status: string;
 }
 
+interface PendingTransfer {
+  id: string;
+  invoice_number: string;
+  to_outlet_code: string;
+  quantity: number;
+  status: string;
+  created_at: string;
+}
+
 type SortKey = 'model_code' | 'brand' | 'quantity' | 'size' | 'frame_type';
+
+function movementLabel(type: string): string {
+  const labels: Record<string, string> = {
+    stock_in: 'Stock In',
+    stock_out: 'Stock Out',
+    transfer_in: 'Transfer In',
+    transfer_out: 'Transfer Out (Supplied to Outlet)',
+    adjustment: 'Adjustment',
+  };
+  return labels[type] ?? type.replace(/_/g, ' ');
+}
 
 export default function StockList() {
   const { outletId } = useParams<{ outletId: string }>();
@@ -51,6 +72,7 @@ export default function StockList() {
   const [editSku, setEditSku] = useState<StockRow | null>(null);
   const [historyRow, setHistoryRow] = useState<StockRow | null>(null);
   const [skuMovements, setSkuMovements] = useState<any[]>([]);
+  const [pendingTransfers, setPendingTransfers] = useState<PendingTransfer[]>([]);
   const [movLoading, setMovLoading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -60,21 +82,52 @@ export default function StockList() {
     setHistoryRow(row);
     setMovLoading(true);
     setSkuMovements([]);
-    // Re-fetch outlet if needed
-    let outletId = outlet?.id;
-    if (!outletId) {
+    setPendingTransfers([]);
+
+    let resolvedOutletId = outlet?.id;
+    if (!resolvedOutletId) {
       const { data: od } = await supabase.from('outlets').select('id').eq('code', outletCode).single();
-      outletId = od?.id;
+      resolvedOutletId = od?.id;
     }
-    if (!outletId) { setMovLoading(false); return; }
-    const { data } = await supabase
-      .from('stock_movements')
-      .select('id, movement_type, quantity, notes, created_by, created_at')
-      .eq('outlet_id', outletId)
-      .eq('sku_id', row.sku_id)
-      .order('created_at', { ascending: false })
-      .limit(50);
-    setSkuMovements(data ?? []);
+    if (!resolvedOutletId) { setMovLoading(false); return; }
+
+    const [movRes, pendingRes] = await Promise.all([
+      supabase
+        .from('stock_movements')
+        .select('id, movement_type, quantity, notes, created_by, created_at')
+        .eq('outlet_id', resolvedOutletId)
+        .eq('sku_id', row.sku_id)
+        .order('created_at', { ascending: false })
+        .limit(50),
+      outletCode === 'PLT'
+        ? supabase
+            .from('transfers')
+            .select(`
+              id, invoice_number, status, created_at,
+              to_outlet:outlets!transfers_to_outlet_id_fkey(code),
+              transfer_items(sku_id, quantity)
+            `)
+            .eq('from_outlet_id', resolvedOutletId)
+            .in('status', ['pending_confirmation', 'delivered'])
+            .eq('plt_stock_deducted', false)
+        : Promise.resolve({ data: [] }),
+    ]);
+
+    setSkuMovements(movRes.data ?? []);
+
+    // Filter pending transfers to only those containing this SKU
+    const pending: PendingTransfer[] = ((pendingRes.data ?? []) as any[]).flatMap((t: any) => {
+      const items = (t.transfer_items ?? []).filter((i: any) => i.sku_id === row.sku_id);
+      return items.map((i: any) => ({
+        id: t.id,
+        invoice_number: t.invoice_number,
+        to_outlet_code: t.to_outlet?.code ?? '',
+        quantity: i.quantity,
+        status: t.status,
+        created_at: t.created_at,
+      }));
+    });
+    setPendingTransfers(pending);
     setMovLoading(false);
   }
 
@@ -84,17 +137,37 @@ export default function StockList() {
     if (!outletData) { setLoading(false); return; }
     setOutlet(outletData);
 
-    const { data: balances } = await supabase
-      .from('stock_balance')
-      .select(`
-        id, quantity, low_stock_threshold, sku_id,
-        skus!inner(id, color_code, size, frame_model_id, status,
-          outlet_sku_prices(cost_price, selling_price, outlet_id),
-          frame_models!inner(id, brand, model_code, frame_type, category, suppliers(name)))
-      `)
-      .eq('outlet_id', outletData.id);
+    const [balancesRes, pendingRes] = await Promise.all([
+      supabase
+        .from('stock_balance')
+        .select(`
+          id, quantity, low_stock_threshold, sku_id,
+          skus!inner(id, color_code, size, frame_model_id, status,
+            outlet_sku_prices(cost_price, selling_price, outlet_id),
+            frame_models!inner(id, brand, model_code, frame_type, category, suppliers(name)))
+        `)
+        .eq('outlet_id', outletData.id),
+      outletData.code === 'PLT'
+        ? supabase
+            .from('transfers')
+            .select('transfer_items(sku_id, quantity)')
+            .eq('from_outlet_id', outletData.id)
+            .in('status', ['pending_confirmation', 'delivered'])
+            .eq('plt_stock_deducted', false)
+        : Promise.resolve({ data: [] }),
+    ]);
 
-    const rows: StockRow[] = (balances ?? []).map((b: any) => {
+    // Build on-hold map: sku_id → qty held in pending transfers
+    const onHoldMap: Record<string, number> = {};
+    if (outletData.code === 'PLT') {
+      ((pendingRes.data ?? []) as any[]).forEach((t: any) => {
+        (t.transfer_items ?? []).forEach((i: any) => {
+          onHoldMap[i.sku_id] = (onHoldMap[i.sku_id] ?? 0) + i.quantity;
+        });
+      });
+    }
+
+    const rows: StockRow[] = ((balancesRes.data ?? []) as any[]).map((b: any) => {
       const price = (b.skus?.outlet_sku_prices ?? []).find((p: any) => p.outlet_id === outletData.id)
         ?? b.skus?.outlet_sku_prices?.[0];
       return {
@@ -108,6 +181,7 @@ export default function StockList() {
         frame_type: b.skus?.frame_models?.frame_type ?? '',
         category: b.skus?.frame_models?.category ?? '',
         quantity: b.quantity,
+        on_hold_qty: onHoldMap[b.sku_id] ?? 0,
         low_stock_threshold: b.low_stock_threshold,
         cost_price: price?.cost_price ?? 0,
         selling_price: price?.selling_price ?? 0,
@@ -171,24 +245,20 @@ export default function StockList() {
     const rows: any[] = XLSX.utils.sheet_to_json(ws);
     let imported = 0;
     for (const row of rows) {
-      // Upsert frame model
       const { data: fm } = await supabase.from('frame_models').upsert({
         brand: row['Brand'] ?? '', model_code: row['Model Code'] ?? '',
         frame_type: row['Type'] ?? 'Plastic', category: row['Category'] ?? 'Frame', notes: '',
       }, { onConflict: 'model_code' }).select().single();
       if (!fm) continue;
-      // Upsert SKU
       const { data: sku } = await supabase.from('skus').upsert({
         frame_model_id: fm.id, color_code: row['Color'] ?? '', size: String(row['Size'] ?? ''),
         plt_cost_price: 0, plt_selling_price: 0,
       }, { onConflict: 'frame_model_id,color_code,size' }).select().single();
       if (!sku) continue;
-      // Upsert balance
       await supabase.from('stock_balance').upsert({
         outlet_id: outlet.id, sku_id: sku.id, quantity: Number(row['Quantity'] ?? 0),
         low_stock_threshold: Number(row['Low Stock Threshold'] ?? 5),
       }, { onConflict: 'outlet_id,sku_id' });
-      // Upsert outlet price
       await supabase.from('outlet_sku_prices').upsert({
         sku_id: sku.id, outlet_id: outlet.id,
         cost_price: Number(row['Cost Price'] ?? 0), selling_price: Number(row['Selling Price'] ?? 0),
@@ -202,6 +272,9 @@ export default function StockList() {
 
   if (loading) return <LoadingSpinner />;
 
+  const isPLT = outletCode === 'PLT';
+  const totalOnHold = stocks.reduce((s, r) => s + r.on_hold_qty, 0);
+
   return (
     <div className="space-y-4">
       {/* Top bar */}
@@ -209,7 +282,12 @@ export default function StockList() {
         <div>
           {outlet && <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${OUTLET_COLORS[outlet.code as OutletCode] ?? ''}`}>{outlet.code}</span>}
           <h2 className="text-lg font-bold text-slate-800 mt-1">Stock Inventory</h2>
-          <p className="text-sm text-slate-500">{stocks.length} SKUs · {filtered.length} shown</p>
+          <p className="text-sm text-slate-500">
+            {stocks.length} SKUs · {filtered.length} shown
+            {isPLT && totalOnHold > 0 && (
+              <span className="ml-2 text-amber-600 font-medium">· {totalOnHold} units on hold</span>
+            )}
+          </p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <button onClick={() => fileRef.current?.click()} className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50">
@@ -283,7 +361,7 @@ export default function StockList() {
                 </th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500">Cat.</th>
                 <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 cursor-pointer hover:text-slate-800" onClick={() => toggleSort('quantity')}>
-                  <span className="flex items-center gap-1 justify-end">Qty <SortIcon k="quantity" /></span>
+                  <span className="flex items-center gap-1 justify-end">{isPLT ? 'Avail / On Hold' : 'Qty'} <SortIcon k="quantity" /></span>
                 </th>
                 {canViewCostPrice() && <>
                   <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500">Cost</th>
@@ -296,46 +374,67 @@ export default function StockList() {
             <tbody className="divide-y divide-slate-50">
               {filtered.length === 0 ? (
                 <tr><td colSpan={11} className="text-center py-12 text-slate-400">No items found.</td></tr>
-              ) : filtered.map((row) => (
-                <tr key={row.balance_id} className={`hover:bg-slate-50 ${row.quantity <= row.low_stock_threshold ? 'bg-red-50' : ''}`}>
-                  <td className="px-4 py-3 font-medium text-slate-800">{row.brand}</td>
-                  <td className="px-4 py-3 text-slate-700">{row.model_code}</td>
-                  <td className="px-4 py-3 text-slate-600">{row.color_code}</td>
-                  <td className="px-4 py-3 text-slate-600">{row.size}</td>
-                  <td className="px-4 py-3">
-                    <span className="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">{row.frame_type}</span>
-                  </td>
-                  <td className="px-4 py-3 text-slate-600 text-xs">{row.category}</td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      {row.quantity <= row.low_stock_threshold && <AlertTriangle size={12} className="text-red-500" />}
-                      <span className={`font-bold ${row.quantity <= row.low_stock_threshold ? 'text-red-600' : 'text-slate-800'}`}>
-                        {row.quantity}
-                      </span>
-                    </div>
-                    <div className="text-xs text-slate-400">min: {row.low_stock_threshold}</div>
-                  </td>
-                  {canViewCostPrice() && <>
-                    <td className="px-4 py-3 text-right text-slate-600">{formatCurrency(row.cost_price)}</td>
-                    <td className="px-4 py-3 text-right text-slate-600">{formatCurrency(row.selling_price)}</td>
-                  </>}
-                  <td className="px-4 py-3 text-center">
-                    <div className="flex items-center justify-center gap-1">
-                      {row.status === 'discontinued' && (
-                        <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">D/C</span>
+              ) : filtered.map((row) => {
+                const available = row.quantity - row.on_hold_qty;
+                const isLow = available <= row.low_stock_threshold;
+                return (
+                  <tr key={row.balance_id} className={`hover:bg-slate-50 ${isLow ? 'bg-red-50' : ''}`}>
+                    <td className="px-4 py-3 font-medium text-slate-800">{row.brand}</td>
+                    <td className="px-4 py-3 text-slate-700">{row.model_code}</td>
+                    <td className="px-4 py-3 text-slate-600">{row.color_code}</td>
+                    <td className="px-4 py-3 text-slate-600">{row.size}</td>
+                    <td className="px-4 py-3">
+                      <span className="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">{row.frame_type}</span>
+                    </td>
+                    <td className="px-4 py-3 text-slate-600 text-xs">{row.category}</td>
+                    <td className="px-4 py-3 text-right">
+                      {isPLT ? (
+                        <>
+                          <div className="flex items-center justify-end gap-1">
+                            {isLow && <AlertTriangle size={12} className="text-red-500" />}
+                            <span className={`font-bold ${isLow ? 'text-red-600' : 'text-slate-800'}`}>{available}</span>
+                          </div>
+                          {row.on_hold_qty > 0 && (
+                            <div className="flex items-center justify-end gap-1 text-xs text-amber-600 font-medium">
+                              <Clock size={10} /> {row.on_hold_qty} on hold
+                            </div>
+                          )}
+                          <div className="text-xs text-slate-400">min: {row.low_stock_threshold}</div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-end gap-1">
+                            {row.quantity <= row.low_stock_threshold && <AlertTriangle size={12} className="text-red-500" />}
+                            <span className={`font-bold ${row.quantity <= row.low_stock_threshold ? 'text-red-600' : 'text-slate-800'}`}>
+                              {row.quantity}
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-400">min: {row.low_stock_threshold}</div>
+                        </>
                       )}
-                      <button onClick={() => { setEditSku(row); setShowForm(true); }} className="p-1.5 rounded-lg hover:bg-blue-100 text-blue-500" title="Edit">
-                        <Edit2 size={14} />
+                    </td>
+                    {canViewCostPrice() && <>
+                      <td className="px-4 py-3 text-right text-slate-600">{formatCurrency(row.cost_price)}</td>
+                      <td className="px-4 py-3 text-right text-slate-600">{formatCurrency(row.selling_price)}</td>
+                    </>}
+                    <td className="px-4 py-3 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        {row.status === 'discontinued' && (
+                          <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">D/C</span>
+                        )}
+                        <button onClick={() => { setEditSku(row); setShowForm(true); }} className="p-1.5 rounded-lg hover:bg-blue-100 text-blue-500" title="Edit">
+                          <Edit2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <button onClick={() => openSkuHistory(row)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400" title="View movement history">
+                        <History size={14} />
                       </button>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    <button onClick={() => openSkuHistory(row)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400" title="View movement history">
-                      <History size={14} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -357,18 +456,40 @@ export default function StockList() {
       {/* SKU Movement History Modal */}
       <Modal
         open={!!historyRow}
-        onClose={() => { setHistoryRow(null); setSkuMovements([]); }}
+        onClose={() => { setHistoryRow(null); setSkuMovements([]); setPendingTransfers([]); }}
         title={historyRow ? `${historyRow.brand} ${historyRow.model_code}-${historyRow.color_code} (Sz ${historyRow.size})` : ''}
         size="lg"
       >
         <div>
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs text-slate-500">Movement history at {outletCode} · last 50 records</span>
-            <span className="text-sm font-semibold text-slate-700">Current Qty: {historyRow?.quantity ?? 0}</span>
+          {/* Summary header */}
+          <div className="flex items-start justify-between mb-4">
+            <span className="text-xs text-slate-500 mt-1">Movement history at {outletCode} · last 50 records</span>
+            {isPLT ? (
+              <div className="text-right space-y-0.5">
+                <div className="text-sm text-slate-600">
+                  In Stock: <span className="font-bold text-slate-800">{historyRow?.quantity ?? 0}</span>
+                </div>
+                {pendingTransfers.length > 0 && (
+                  <>
+                    <div className="text-sm text-amber-600">
+                      On Hold: <span className="font-bold">{pendingTransfers.reduce((s, p) => s + p.quantity, 0)}</span>
+                    </div>
+                    <div className="text-sm text-green-700">
+                      Available: <span className="font-bold">
+                        {(historyRow?.quantity ?? 0) - pendingTransfers.reduce((s, p) => s + p.quantity, 0)}
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : (
+              <span className="text-sm font-semibold text-slate-700">Current Qty: {historyRow?.quantity ?? 0}</span>
+            )}
           </div>
+
           {movLoading ? (
             <div className="text-center py-8 text-slate-400">Loading...</div>
-          ) : skuMovements.length === 0 ? (
+          ) : (skuMovements.length === 0 && pendingTransfers.length === 0) ? (
             <div className="text-center py-8 text-slate-400">No movement history yet for this SKU.</div>
           ) : (
             <div className="overflow-auto max-h-96 rounded-lg border border-slate-100">
@@ -383,12 +504,33 @@ export default function StockList() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
+                  {/* Pending "On Hold" rows pinned at the top */}
+                  {pendingTransfers.map((p) => (
+                    <tr key={`pending-${p.id}-${p.to_outlet_code}`} className="bg-amber-50">
+                      <td className="px-3 py-2 text-xs text-slate-500">
+                        {new Date(p.created_at).toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' })}
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className="text-xs font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 flex items-center gap-1 w-fit">
+                          <Clock size={10} /> Pending Received
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right font-bold text-amber-600">-{p.quantity}</td>
+                      <td className="px-3 py-2 text-xs text-slate-600">
+                        Awaiting receipt by {p.to_outlet_code} · {p.invoice_number}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-500">PLT</td>
+                    </tr>
+                  ))}
+                  {/* Actual movement history */}
                   {skuMovements.map((m) => (
                     <tr key={m.id} className="hover:bg-slate-50">
-                      <td className="px-3 py-2 text-xs text-slate-500">{new Date(m.created_at).toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                      <td className="px-3 py-2 text-xs text-slate-500">
+                        {new Date(m.created_at).toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' })}
+                      </td>
                       <td className="px-3 py-2">
                         <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${m.movement_type.includes('in') ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                          {m.movement_type.replace('_', ' ')}
+                          {movementLabel(m.movement_type)}
                         </span>
                       </td>
                       <td className={`px-3 py-2 text-right font-bold ${m.movement_type.includes('out') ? 'text-red-600' : 'text-green-600'}`}>
