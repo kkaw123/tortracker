@@ -37,6 +37,7 @@ export default function OutletDashboard() {
   const [outlet, setOutlet] = useState<{ id: string; code: OutletCode; name: string } | null>(null);
 
   const outletCode = outletId?.toUpperCase() as OutletCode;
+  const [inTransitQty, setInTransitQty] = useState(0);
 
   useEffect(() => {
     if (!canViewOutlet(outletCode)) {
@@ -45,6 +46,21 @@ export default function OutletDashboard() {
     }
     fetchData();
   }, [outletId]);
+
+  useEffect(() => {
+    if (outletCode !== 'PLT' || !outlet) return;
+    supabase
+      .from('transfers')
+      .select('transfer_items(quantity)')
+      .eq('from_outlet_id', outlet.id)
+      .in('status', ['pending_confirmation', 'delivered'])
+      .eq('plt_stock_deducted', false)
+      .then(({ data }) => {
+        const qty = (data ?? []).reduce((s: number, t: any) =>
+          s + (t.transfer_items ?? []).reduce((ss: number, i: any) => ss + i.quantity, 0), 0);
+        setInTransitQty(qty);
+      });
+  }, [outlet, outletCode]);
 
   async function fetchData() {
     setLoading(true);
@@ -107,24 +123,6 @@ export default function OutletDashboard() {
 
   if (loading) return <LoadingSpinner text={`Loading ${outletCode} dashboard...`} />;
   if (!outlet) return <div className="text-red-600 p-4">Outlet not found.</div>;
-
-  const [inTransitQty, setInTransitQty] = useState(0);
-
-  useEffect(() => {
-    if (outletCode === 'PLT' && outlet) {
-      supabase
-        .from('transfers')
-        .select('transfer_items(quantity)')
-        .eq('from_outlet_id', outlet.id)
-        .in('status', ['pending_confirmation', 'delivered'])
-        .eq('plt_stock_deducted', false)
-        .then(({ data }) => {
-          const qty = (data ?? []).reduce((s: number, t: any) =>
-            s + (t.transfer_items ?? []).reduce((ss: number, i: any) => ss + i.quantity, 0), 0);
-          setInTransitQty(qty);
-        });
-    }
-  }, [outlet, outletCode]);
 
   const totalQty = stocks.reduce((s, i) => s + i.quantity, 0);
   const totalValue = stocks.reduce((s, i) => s + i.quantity * i.cost_price, 0);
