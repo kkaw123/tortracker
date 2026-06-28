@@ -26,6 +26,7 @@ interface StockItem {
   frame_type: string;
   category: string;
   sold_last_30: number;
+  status: string;
 }
 
 export default function OutletDashboard() {
@@ -77,7 +78,7 @@ export default function OutletDashboard() {
         .from('stock_balance')
         .select(`
           id, quantity, low_stock_threshold, sku_id,
-          skus!inner(color_code, size, outlet_sku_prices(cost_price, selling_price, outlet_id), frame_models!inner(brand, model_code, frame_type, category))
+          skus!inner(color_code, size, status, outlet_sku_prices(cost_price, selling_price, outlet_id), frame_models!inner(brand, model_code, frame_type, category))
         `)
         .eq('outlet_id', outletData.id);
 
@@ -113,6 +114,7 @@ export default function OutletDashboard() {
         frame_type: b.skus?.frame_models?.frame_type ?? '',
         category: b.skus?.frame_models?.category ?? '',
         sold_last_30: soldMap[b.sku_id] ?? 0,
+        status: b.skus?.status ?? 'active',
         };
       });
       setStocks(items);
@@ -124,14 +126,16 @@ export default function OutletDashboard() {
   if (loading) return <LoadingSpinner text={`Loading ${outletCode} dashboard...`} />;
   if (!outlet) return <div className="text-red-600 p-4">Outlet not found.</div>;
 
-  const totalQty = stocks.reduce((s, i) => s + i.quantity, 0);
-  const totalValue = stocks.reduce((s, i) => s + i.quantity * i.cost_price, 0);
-  const lowStockItems = stocks.filter((i) => i.quantity <= i.low_stock_threshold);
+  const activeStocks = stocks.filter((i) => i.status !== 'discontinued');
+  const discontinuedWithStock = stocks.filter((i) => i.status === 'discontinued' && i.quantity > 0);
+  const totalQty = activeStocks.reduce((s, i) => s + i.quantity, 0);
+  const totalValue = activeStocks.reduce((s, i) => s + i.quantity * i.cost_price, 0);
+  const lowStockItems = activeStocks.filter((i) => i.quantity <= i.low_stock_threshold);
   const fastMovers = [...stocks].sort((a, b) => b.sold_last_30 - a.sold_last_30).slice(0, 10);
 
-  // By frame type
+  // By frame type (active only)
   const byType: Record<string, number> = {};
-  stocks.forEach((s) => { byType[s.frame_type] = (byType[s.frame_type] ?? 0) + s.quantity; });
+  activeStocks.forEach((s) => { byType[s.frame_type] = (byType[s.frame_type] ?? 0) + s.quantity; });
   const typeChartData = Object.entries(byType).map(([name, value]) => ({ name, value }));
 
   // By category
@@ -179,6 +183,25 @@ export default function OutletDashboard() {
           <StatCard label="Stock Value" value={formatCurrency(totalValue)} icon={<TrendingUp size={18} />} color="green" />
         ) : null}
       </div>
+
+      {/* Discontinued stock warning */}
+      {discontinuedWithStock.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={15} className="text-amber-600 shrink-0" />
+            <span className="text-sm text-amber-800">
+              <strong>{discontinuedWithStock.reduce((s, i) => s + i.quantity, 0)} units</strong> in{' '}
+              {discontinuedWithStock.length} discontinued SKU{discontinuedWithStock.length > 1 ? 's' : ''} are not shown above.
+            </span>
+          </div>
+          <button
+            onClick={() => navigate(`/outlet/${outletId}/stock?status=discontinued`)}
+            className="text-xs text-amber-700 underline whitespace-nowrap hover:text-amber-900"
+          >
+            View discontinued
+          </button>
+        </div>
+      )}
 
       {/* Low Stock Alert Banner */}
       {lowStockItems.length > 0 && (

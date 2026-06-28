@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Trash2, XCircle, CheckCircle } from 'lucide-react';
+import { Trash2, XCircle, CheckCircle, TrendingDown } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { FRAME_TYPES, CATEGORIES } from '../../lib/utils';
 import { useAuth } from '../../contexts/AuthContext';
@@ -36,6 +36,7 @@ export default function StockForm({ outlet, editData, onSaved, onCancel, onDelet
   const [costPrice, setCostPrice] = useState(String(editData?.cost_price ?? 0));
   const [sellingPrice, setSellingPrice] = useState(String(editData?.selling_price ?? 0));
   const [supplierName, setSupplierName] = useState(editData?.supplier_name !== '-' ? editData?.supplier_name ?? '' : '');
+  const [slowMoving, setSlowMoving] = useState<boolean>(editData?.slow_moving ?? false);
 
   async function handleSave() {
     setError('');
@@ -82,6 +83,7 @@ export default function StockForm({ outlet, editData, onSaved, onCancel, onDelet
           size: size.trim(),
           plt_cost_price: outlet.code === 'PLT' ? Number(costPrice) : 0,
           plt_selling_price: outlet.code === 'PLT' ? Number(sellingPrice) : 0,
+          slow_moving: slowMoving,
         }, { onConflict: 'frame_model_id,color_code,size' })
         .select()
         .single();
@@ -222,6 +224,24 @@ export default function StockForm({ outlet, editData, onSaved, onCancel, onDelet
       </div>
 
       {input('Supplier Name', supplierName, setSupplierName)}
+
+      {/* Slow-moving toggle — manual label for stocks that sell slowly */}
+      <label className="flex items-start gap-3 p-3 rounded-lg border border-slate-200 cursor-pointer hover:bg-slate-50 transition-colors">
+        <input
+          type="checkbox"
+          checked={slowMoving}
+          onChange={(e) => setSlowMoving(e.target.checked)}
+          className="mt-0.5 w-4 h-4 accent-amber-500 shrink-0"
+        />
+        <div>
+          <div className="text-sm font-medium text-slate-700 flex items-center gap-1.5">
+            <TrendingDown size={14} className="text-amber-500" /> Mark as Slow-Moving
+          </div>
+          <div className="text-xs text-slate-400 mt-0.5">
+            Manually flag this SKU as slow-moving. It stays active in stock but can be filtered separately.
+          </div>
+        </div>
+      </label>
 
       <div className="flex justify-between gap-3 pt-2">
         <div className="flex gap-2">

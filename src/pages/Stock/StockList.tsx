@@ -65,7 +65,7 @@ export default function StockList() {
   const [filterType, setFilterType] = useState('');
   const [filterCat, setFilterCat] = useState('');
   const [filterSize, setFilterSize] = useState('');
-  const [filterStatus, setFilterStatus] = useState('active');
+  const [filterStatus, setFilterStatus] = useState(searchParams.get('status') ?? 'active');
   const [onlyLow, setOnlyLow] = useState(searchParams.get('filter') === 'low');
   const [onlySlowMoving, setOnlySlowMoving] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>('model_code');
