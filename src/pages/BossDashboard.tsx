@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Package, AlertTriangle, DollarSign, ArrowRight, RefreshCw, X } from 'lucide-react';
+import { Package, AlertTriangle, DollarSign, ArrowRight, RefreshCw, X, TrendingUp, TrendingDown, ChevronLeft } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { supabase } from '../lib/supabase';
 import { formatCurrency, OUTLET_COLORS } from '../lib/utils';
@@ -40,6 +40,18 @@ interface OutletStats {
   by_category: Record<string, number>;
 }
 
+interface SkuSalesData {
+  sku_id: string;
+  brand: string;
+  model_code: string;
+  color_code: string;
+  size: string;
+  total_sold: number;
+  last_sold_at: string | null;
+  slow_moving: boolean;
+  by_outlet: Record<string, { sold: number; last_sold: string | null }>;
+}
+
 const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
 const OUTLET_CHART_COLORS: Record<string, string> = {
   PLT: '#8b5cf6', SS2: '#3b82f6', KD: '#10b981', CHR: '#f59e0b'
@@ -56,6 +68,11 @@ export default function BossDashboard() {
   const [skuGroupModal, setSkuGroupModal] = useState(false);
   const [valueModal, setValueModal] = useState(false);
   const [frameTypeModal, setFrameTypeModal] = useState(false);
+  const [speedModal, setSpeedModal] = useState(false);
+  const [speedTab, setSpeedTab] = useState<'best' | 'slow'>('best');
+  const [speedData, setSpeedData] = useState<SkuSalesData[]>([]);
+  const [speedDrill, setSpeedDrill] = useState<SkuSalesData | null>(null);
+  const [slowMovingCount, setSlowMovingCount] = useState(0);
   const [allStock, setAllStock] = useState<AllStockRow[]>([]);
   const [skuGroups, setSkuGroups] = useState<SkuGroup[]>([]);
   const [modalLoading, setModalLoading] = useState(false);
@@ -164,9 +181,114 @@ export default function BossDashboard() {
       }
       setStats(result);
       setLastUpdated(new Date());
+
+      // Quick slow-moving count for stat card
+      const { count: smCount } = await supabase
+        .from('skus')
+        .select('id', { count: 'exact', head: true })
+        .eq('slow_moving', true)
+        .eq('status', 'active');
+      setSlowMovingCount(smCount ?? 0);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function openSpeedModal() {
+    setSpeedModal(true);
+    setSpeedTab('best');
+    setSpeedDrill(null);
+    setModalSearch('');
+    setModalLoading(true);
+
+    // Non-PLT outlets only (the selling outlets)
+    const { data: outlets } = await supabase.from('outlets').select('id, code').neq('code', 'PLT');
+    const outletMap: Record<string, string> = {};
+    const outletIds: string[] = [];
+    (outlets ?? []).forEach((o: any) => { outletMap[o.id] = o.code; outletIds.push(o.id); });
+    const outletCodes = ['SS2', 'KD', 'CHR'];
+
+    // All "Sold" stock_out movements from selling outlets
+    const { data: movements } = await supabase
+      .from('stock_movements')
+      .select('sku_id, quantity, created_at, outlet_id, skus!inner(color_code, size, slow_moving, frame_models!inner(brand, model_code))')
+      .in('outlet_id', outletIds)
+      .eq('movement_type', 'out')
+      .ilike('notes', 'Sold%');
+
+    // All active SKUs across selling outlets (to catch zero-sales items)
+    const { data: balances } = await supabase
+      .from('stock_balance')
+      .select('sku_id, skus!inner(color_code, size, slow_moving, status, frame_models!inner(brand, model_code))')
+      .in('outlet_id', outletIds);
+
+    const salesMap: Record<string, SkuSalesData> = {};
+
+    // Seed from balances so zero-sale active SKUs appear in Slow Moving
+    (balances ?? []).forEach((b: any) => {
+      if ((b.skus?.status ?? 'active') === 'discontinued') return;
+      const id = b.sku_id;
+      if (!salesMap[id]) {
+        salesMap[id] = {
+          sku_id: id,
+          brand: b.skus?.frame_models?.brand ?? '',
+          model_code: b.skus?.frame_models?.model_code ?? '',
+          color_code: b.skus?.color_code ?? '',
+          size: b.skus?.size ?? '',
+          total_sold: 0,
+          last_sold_at: null,
+          slow_moving: b.skus?.slow_moving ?? false,
+          by_outlet: Object.fromEntries(outletCodes.map((c) => [c, { sold: 0, last_sold: null }])),
+        };
+      }
+    });
+
+    // Accumulate sales
+    (movements ?? []).forEach((m: any) => {
+      const id = m.sku_id;
+      const outlet = outletMap[m.outlet_id] ?? '?';
+      if (!salesMap[id]) {
+        salesMap[id] = {
+          sku_id: id,
+          brand: m.skus?.frame_models?.brand ?? '',
+          model_code: m.skus?.frame_models?.model_code ?? '',
+          color_code: m.skus?.color_code ?? '',
+          size: m.skus?.size ?? '',
+          total_sold: 0,
+          last_sold_at: null,
+          slow_moving: m.skus?.slow_moving ?? false,
+          by_outlet: Object.fromEntries(outletCodes.map((c) => [c, { sold: 0, last_sold: null }])),
+        };
+      }
+      salesMap[id].total_sold += m.quantity;
+      if (!salesMap[id].last_sold_at || m.created_at > salesMap[id].last_sold_at!) {
+        salesMap[id].last_sold_at = m.created_at;
+      }
+      if (!salesMap[id].by_outlet[outlet]) salesMap[id].by_outlet[outlet] = { sold: 0, last_sold: null };
+      salesMap[id].by_outlet[outlet].sold += m.quantity;
+      if (!salesMap[id].by_outlet[outlet].last_sold || m.created_at > salesMap[id].by_outlet[outlet].last_sold!) {
+        salesMap[id].by_outlet[outlet].last_sold = m.created_at;
+      }
+    });
+
+    // Auto-mark slow moving (90-day rule)
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 90);
+    const toSlow: string[] = [], toActive: string[] = [];
+
+    Object.values(salesMap).forEach((row) => {
+      const isAutoSlow = !row.last_sold_at || new Date(row.last_sold_at) < cutoff;
+      row.slow_moving = isAutoSlow;
+      if (isAutoSlow) toSlow.push(row.sku_id);
+      else toActive.push(row.sku_id);
+    });
+
+    if (toSlow.length > 0) await supabase.from('skus').update({ slow_moving: true }).in('id', toSlow);
+    if (toActive.length > 0) await supabase.from('skus').update({ slow_moving: false }).in('id', toActive);
+    setSlowMovingCount(toSlow.length);
+
+    setSpeedData(Object.values(salesMap));
+    setModalLoading(false);
   }
 
   if (loading) return <LoadingSpinner text="Loading overview dashboard..." />;
@@ -207,7 +329,7 @@ export default function BossDashboard() {
       </div>
 
       {/* Global KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard label="Total Stock Units" value={totalQty.toLocaleString()} icon={<Package size={18} />} color="blue"
           onClick={() => openAllStockModal('units')} />
         <StatCard label="Total SKUs" value={totalSkus.toLocaleString()} icon={<Package size={18} />} color="purple"
@@ -216,6 +338,13 @@ export default function BossDashboard() {
           onClick={() => openAllStockModal('low')} />
         <StatCard label="Total Stock Value" value={formatCurrency(totalValue)} icon={<DollarSign size={18} />} color="green"
           onClick={() => setValueModal(true)} />
+        <StatCard
+          label="Stock Moving Speed"
+          value={slowMovingCount > 0 ? `${slowMovingCount} Slow Moving` : 'All Active'}
+          icon={slowMovingCount > 0 ? <TrendingDown size={18} /> : <TrendingUp size={18} />}
+          color={slowMovingCount > 0 ? 'red' : 'green'}
+          onClick={openSpeedModal}
+        />
       </div>
 
       {/* Supply Recommendations */}
@@ -627,6 +756,208 @@ export default function BossDashboard() {
                 </div>
 
               </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Stock Moving Speed Modal ── */}
+      {speedModal && (() => {
+        const ninetyDaysAgo = new Date();
+        ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+
+        const daysSince = (d: string | null) => {
+          if (!d) return null;
+          return Math.floor((Date.now() - new Date(d).getTime()) / 86400000);
+        };
+        const fmtDate = (d: string | null) => {
+          if (!d) return '—';
+          return new Date(d).toLocaleDateString('en-MY', { day: 'numeric', month: 'short', year: '2-digit' });
+        };
+
+        const bestSellers = [...speedData]
+          .filter((r) => r.total_sold > 0)
+          .sort((a, b) => b.total_sold - a.total_sold);
+        const slowMovers = [...speedData]
+          .filter((r) => r.slow_moving)
+          .sort((a, b) => (a.last_sold_at ?? '').localeCompare(b.last_sold_at ?? ''));
+        const tableRows = speedTab === 'best' ? bestSellers : slowMovers;
+        const filtered = tableRows.filter((r) =>
+          !modalSearch || `${r.brand} ${r.model_code} ${r.color_code}`.toLowerCase().includes(modalSearch.toLowerCase())
+        );
+        const outletCodes = ['SS2', 'KD', 'CHR'];
+        const maxSold = Math.max(...bestSellers.map((r) => r.total_sold), 1);
+
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 pt-10 px-4">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[88vh] flex flex-col">
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+                <div className="flex items-center gap-3">
+                  {speedDrill && (
+                    <button onClick={() => setSpeedDrill(null)}
+                      className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 font-medium">
+                      <ChevronLeft size={16} /> Back
+                    </button>
+                  )}
+                  <div>
+                    <h3 className="text-base font-bold text-slate-800">
+                      {speedDrill
+                        ? `${speedDrill.brand} ${speedDrill.model_code}-${speedDrill.color_code} (Size ${speedDrill.size})`
+                        : 'Stock Moving Speed — SS2 · KD · CHR'}
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      {speedDrill
+                        ? 'Per-outlet sales breakdown'
+                        : 'Based on Daily Adjustment "Sold" entries · Slow Moving = no sales in 90+ days'}
+                    </p>
+                  </div>
+                </div>
+                <button onClick={() => { setSpeedModal(false); setSpeedDrill(null); }}
+                  className="p-2 rounded-lg hover:bg-slate-100 text-slate-400"><X size={18} /></button>
+              </div>
+
+              {!speedDrill && (
+                <>
+                  {/* Tabs */}
+                  <div className="flex border-b border-slate-100 px-6">
+                    {(['best', 'slow'] as const).map((tab) => (
+                      <button key={tab} onClick={() => { setSpeedTab(tab); setModalSearch(''); }}
+                        className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+                          speedTab === tab
+                            ? 'border-blue-500 text-blue-600'
+                            : 'border-transparent text-slate-500 hover:text-slate-700'
+                        }`}>
+                        {tab === 'best'
+                          ? `🔥 Best Sellers (${bestSellers.length})`
+                          : `🐌 Slow Moving (${slowMovers.length})`}
+                      </button>
+                    ))}
+                  </div>
+                  {/* Search */}
+                  <div className="px-6 py-3 border-b border-slate-50">
+                    <input value={modalSearch} onChange={(e) => setModalSearch(e.target.value)}
+                      placeholder="Search brand, model, color..."
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                </>
+              )}
+
+              {modalLoading ? (
+                <div className="p-12 text-center text-slate-400 text-sm">Analysing sales data...</div>
+              ) : speedDrill ? (
+                /* ── Drill-down: per-outlet breakdown ── */
+                <div className="overflow-auto flex-1 p-6 space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {outletCodes.map((oc) => {
+                      const d = speedDrill.by_outlet[oc] ?? { sold: 0, last_sold: null };
+                      const days = daysSince(d.last_sold);
+                      const pct = speedDrill.total_sold > 0 ? Math.round((d.sold / speedDrill.total_sold) * 100) : 0;
+                      const color = oc === 'SS2' ? '#3b82f6' : oc === 'KD' ? '#10b981' : '#f59e0b';
+                      return (
+                        <div key={oc} className="bg-slate-50 rounded-xl p-5 border border-slate-100">
+                          <div className="flex items-center justify-between mb-4">
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${OUTLET_COLORS[oc as OutletCode] ?? 'bg-slate-100 text-slate-600'}`}>{oc}</span>
+                            {d.sold === 0
+                              ? <span className="text-xs text-slate-400">No sales recorded</span>
+                              : <span className="text-xs text-green-600 font-medium">{pct}% of total</span>
+                            }
+                          </div>
+                          <div className="text-4xl font-bold text-slate-800 mb-1">{d.sold}</div>
+                          <div className="text-xs text-slate-400 mb-3">units sold</div>
+                          <div className="h-2 bg-slate-200 rounded-full overflow-hidden mb-3">
+                            <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: color }} />
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            Last sold: <span className="font-medium text-slate-700">{fmtDate(d.last_sold)}</span>
+                            {days !== null && <span className="text-slate-400 ml-1">({days}d ago)</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-center justify-between">
+                    <span className="text-sm font-semibold text-slate-700">Total sold across all outlets</span>
+                    <div className="text-right">
+                      <span className="text-2xl font-bold text-blue-700">{speedDrill.total_sold}</span>
+                      <span className="text-xs text-slate-400 ml-1">units</span>
+                    </div>
+                  </div>
+                  {speedDrill.slow_moving && (
+                    <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5">
+                      <TrendingDown size={15} className="shrink-0" />
+                      No sales in the last 90 days — automatically marked as Slow Moving.
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* ── Main table ── */
+                <div className="overflow-auto flex-1">
+                  {filtered.length === 0 ? (
+                    <div className="p-12 text-center text-slate-400 text-sm">
+                      {speedTab === 'best' ? 'No sales recorded yet.' : 'No slow moving items — great job!'}
+                    </div>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-slate-50 border-b border-slate-200">
+                        <tr>
+                          {['Brand','Model','Color','Size','Total Sold','Last Sold',
+                            ...outletCodes,''].map((h) => (
+                            <th key={h} className={`px-3 py-2.5 text-xs font-semibold text-slate-500 uppercase ${h === '' || h === 'Total Sold' ? 'text-right' : 'text-left'}`}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50">
+                        {filtered.map((row) => {
+                          const days = daysSince(row.last_sold_at);
+                          const barW = speedTab === 'best' ? Math.round((row.total_sold / maxSold) * 100) : 0;
+                          return (
+                            <tr key={row.sku_id}
+                              className="hover:bg-blue-50 cursor-pointer transition-colors"
+                              onClick={() => setSpeedDrill(row)}>
+                              <td className="px-3 py-2.5 font-medium text-slate-800">{row.brand}</td>
+                              <td className="px-3 py-2.5 font-mono text-slate-700">{row.model_code}</td>
+                              <td className="px-3 py-2.5 text-slate-600">{row.color_code}</td>
+                              <td className="px-3 py-2.5 text-slate-500">{row.size}</td>
+                              <td className="px-3 py-2.5 text-right">
+                                {speedTab === 'best' ? (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <div className="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                                      <div className="h-full bg-blue-500 rounded-full" style={{ width: `${barW}%` }} />
+                                    </div>
+                                    <span className="font-bold text-blue-700 w-8 text-right">{row.total_sold}</span>
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-500">{row.total_sold}</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2.5 text-slate-500 text-xs whitespace-nowrap">
+                                {fmtDate(row.last_sold_at)}
+                                {days !== null && days > 90 && (
+                                  <span className="ml-1 text-amber-600">({days}d)</span>
+                                )}
+                                {row.last_sold_at === null && (
+                                  <span className="text-red-400">Never</span>
+                                )}
+                              </td>
+                              {outletCodes.map((oc) => (
+                                <td key={oc} className="px-3 py-2.5 text-right text-slate-600">
+                                  {(row.by_outlet[oc]?.sold ?? 0) > 0
+                                    ? <span className="font-medium">{row.by_outlet[oc].sold}</span>
+                                    : <span className="text-slate-300">—</span>}
+                                </td>
+                              ))}
+                              <td className="px-3 py-2.5 text-slate-300 text-right">
+                                <ArrowRight size={14} />
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         );
