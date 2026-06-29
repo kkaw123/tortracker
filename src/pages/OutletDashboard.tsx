@@ -39,6 +39,7 @@ export default function OutletDashboard() {
 
   const outletCode = outletId?.toUpperCase() as OutletCode;
   const [inTransitQty, setInTransitQty] = useState(0);
+  const [pendingInboundCount, setPendingInboundCount] = useState(0);
 
   useEffect(() => {
     if (!canViewOutlet(outletCode)) {
@@ -61,6 +62,16 @@ export default function OutletDashboard() {
           s + (t.transfer_items ?? []).reduce((ss: number, i: any) => ss + i.quantity, 0), 0);
         setInTransitQty(qty);
       });
+  }, [outlet, outletCode]);
+
+  useEffect(() => {
+    if (outletCode === 'PLT' || !outlet) return;
+    supabase
+      .from('transfers')
+      .select('id', { count: 'exact', head: true })
+      .eq('to_outlet_id', outlet.id)
+      .eq('status', 'delivered')
+      .then(({ count }) => setPendingInboundCount(count ?? 0));
   }, [outlet, outletCode]);
 
   async function fetchData() {
@@ -351,16 +362,25 @@ export default function OutletDashboard() {
           { label: 'Daily Adjustment', icon: <ClipboardList size={20} />, path: 'adjustments' },
           { label: outletCode === 'PLT' ? 'Supply to Outlets' : 'Received Order History', icon: <ArrowRight size={20} />, path: 'transfers' },
           { label: 'Reports', icon: <TrendingUp size={20} />, path: 'reports' },
-        ].map((action) => (
-          <button
-            key={action.path}
-            onClick={() => navigate(`/outlet/${outletId}/${action.path}`)}
-            className="flex flex-col items-center gap-2 p-4 bg-white rounded-xl shadow-sm border border-slate-100 hover:shadow-md hover:border-blue-200 transition-all"
-          >
-            <div className="text-blue-600">{action.icon}</div>
-            <span className="text-sm font-medium text-slate-700">{action.label}</span>
-          </button>
-        ))}
+        ].map((action) => {
+          const isTransfers = action.path === 'transfers';
+          const badge = isTransfers && outletCode !== 'PLT' && pendingInboundCount > 0;
+          return (
+            <button
+              key={action.path}
+              onClick={() => navigate(`/outlet/${outletId}/${action.path}`)}
+              className="relative flex flex-col items-center gap-2 p-4 bg-white rounded-xl shadow-sm border border-slate-100 hover:shadow-md hover:border-blue-200 transition-all"
+            >
+              {badge && (
+                <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-red-500 text-white text-[11px] font-bold shadow">
+                  {pendingInboundCount}
+                </span>
+              )}
+              <div className="text-blue-600">{action.icon}</div>
+              <span className="text-sm font-medium text-slate-700">{action.label}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
