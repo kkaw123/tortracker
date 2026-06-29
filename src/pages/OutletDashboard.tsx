@@ -149,13 +149,13 @@ export default function OutletDashboard() {
   activeStocks.forEach((s) => { byType[s.frame_type] = (byType[s.frame_type] ?? 0) + s.quantity; });
   const typeChartData = Object.entries(byType).map(([name, value]) => ({ name, value }));
 
-  // By category
+  // By category (active only)
   const byCategory: Record<string, number> = {};
-  stocks.forEach((s) => { byCategory[s.category] = (byCategory[s.category] ?? 0) + s.quantity; });
+  activeStocks.forEach((s) => { byCategory[s.category] = (byCategory[s.category] ?? 0) + s.quantity; });
 
-  // By size
+  // By size (active only)
   const bySize: Record<string, number> = {};
-  stocks.forEach((s) => { bySize[s.size] = (bySize[s.size] ?? 0) + s.quantity; });
+  activeStocks.forEach((s) => { bySize[s.size] = (bySize[s.size] ?? 0) + s.quantity; });
   const sizeChartData = Object.entries(bySize)
     .sort((a, b) => Number(a[0]) - Number(b[0]))
     .map(([name, value]) => ({ name, value }));
@@ -183,7 +183,7 @@ export default function OutletDashboard() {
           value={(outletCode === 'PLT' ? Math.max(0, totalQty - inTransitQty) : totalQty).toLocaleString()}
           icon={<Package size={18} />} color="blue"
           onClick={() => navigate(`/outlet/${outletId}/stock`)} />
-        <StatCard label="Total SKUs" value={stocks.length} icon={<Package size={18} />} color="purple"
+        <StatCard label="Total SKUs" value={activeStocks.length} icon={<Package size={18} />} color="purple"
           onClick={() => navigate(`/outlet/${outletId}/stock`)} />
         <StatCard label="Low Stock" value={lowStockItems.length} icon={<AlertTriangle size={18} />} color={lowStockItems.length > 0 ? 'red' : 'green'}
           onClick={() => navigate(`/outlet/${outletId}/stock?filter=low`)} />
